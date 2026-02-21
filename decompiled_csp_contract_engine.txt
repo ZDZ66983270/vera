@@ -1,0 +1,36 @@
+=== <module> (line 1) ===
+  varnames: ()
+  names: ('dataclasses', 'dataclass', 'typing', 'List', 'Dict', 'Any', 'Optional', 'core.config_loader', 'load_csp_rules', 'CSPContractAuditResult', 'float', 'int', 'calc_annual_yield', 'str', 'audit_single_contract', 'Tuple', 'pick_best_csp_contract', 'sqlite3', 'pandas', 'pd', 'datetime', 'date', 'get_csp_candidates')
+  consts: [0, ('dataclass',), ('List', 'Dict', 'Any', 'Optional'), ('load_csp_rules',), 'CSPContractAuditResult', 'premium', 'strike', 'dte', 'return', None, 'opt', 'prefs', ('List', 'Dict', 'Any', 'Optional', 'Tuple'), 'candidates', ('datetime', 'date'), 'db_path', 'asset_id', 'current_price', (None,)]
+  === CSPContractAuditResult (line 5) ===
+    varnames: ()
+    names: ('__name__', '__module__', '__qualname__', '__firstlineno__', 'str', '__annotations__', 'float', 'List', 'Dict', '__static_attributes__')
+    consts: ['CSPContractAuditResult', 5, 'status', 'score', 'reasons', 'suggestion', (), None]
+  === calc_annual_yield (line 12) ===
+    varnames: ('premium', 'strike', 'dte')
+    names: ()
+    consts: ['计算简易年化收益率', 0, 0.0, 365.0]
+  === audit_single_contract (line 18) ===
+    varnames: ('opt', 'prefs', 'rules', 'reasons', 'score', 'dte', 'strike', 'discount_pct', 'delta', 'mid_price', 'annual_yield', 'tenor_cfg', 'TENOR_PREF_MIN', 'TENOR_PREF_MAX', 'money_cfg', 'MIN_DISCOUNT', 'MAX_DISCOUNT', 'delta_cfg', 'DELTA_MIN', 'DELTA_MAX', 'yield_cfg', 'MIN_YIELD', 'status', 'suggestion')
+    names: ('load_csp_rules', 'get', 'calc_annual_yield', 'append', 'any', 'max', 'CSPContractAuditResult')
+    consts: ['\n对单个期权合约进行 CSP 策略审核\n\nArgs:\n    opt: 期权数据字典，必须包含 dte, strike, discount_pct 等字段\n    prefs: 审核规则配置 (从 csp_contract_prefs 加载)，如果为 None 则自动加载\n    \nReturns:\n    CSPContractAuditResult 对象\n', 'csp_contract_prefs', 100.0, 'dte', 0, 'strike', 0.0, 'discount_pct', 'moneyness', 'delta', 'Delta', 'mid', 'bid', 'tenor_days', 'preferred_min', 30, 'preferred_max', 60, 'min_discount_pct', 0.03, 'max_discount_pct', 0.1, 'min', -0.5, 'max', -0.1, 'yield_rules', 'min_annual_yield', 'DISCOUNT_OUT_OF_RANGE', '行权价折价 ', '.1%', ' 不在 [', '.0%', ', ', '] 区间内', ('code', 'message'), 40, 'DELTA_OUT_OF_RANGE', 'Delta=', '.2f', ' 超出配置区间 [', ']', 25, 'YIELD_TOO_LOW', '年化收益率 ', ' 低于最低要求 ', 5, 'APPROVED', frozenset({'DISCOUNT_OUT_OF_RANGE', 'YIELD_TOO_LOW', 'DELTA_OUT_OF_RANGE'}), 'REJECTED', '', '不建议卖出当前合约，请调整行权价/到期日或等待更好的波动率与权利金水平。', '在总体仓位可控前提下，可考虑卖出该 Put 合约作为 CSP 标的。', ('status', 'score', 'reasons', 'suggestion')]
+    === <genexpr> (line 123) ===
+      varnames: ('.0', 'r')
+      names: ()
+      consts: ['code', None]
+  === pick_best_csp_contract (line 148) ===
+    varnames: ('candidates', 'rules', 'prefs', 'audited', 'opt', 'audit', 'o', 'approved', 'pool', 'sort_key', 'sorted_pool', 'best', 'all_sorted')
+    names: ('load_csp_rules', 'get', 'audit_single_contract', 'append', 'status', 'Dict', 'str', 'Any', 'sorted')
+    consts: ['\n输入：候选 PUT 合约列表\n输出：(最佳合约, 所有已审计合约列表)\n', None, 'csp_contract_prefs', '_audit', 'APPROVED', 'o', True, ('key', 'reverse'), 0]
+    === sort_key (line 170) ===
+      varnames: ('o', 'audit', 'mid', 'ay', 'status_score')
+      names: ('get', 'calc_annual_yield', 'status', 'score')
+      consts: [None, '_audit', 'mid', 'bid', 0.0, 'strike', 1.0, 'dte', 1, 'APPROVED', 0]
+    === <lambda> (line 183) ===
+      varnames: ('x',)
+      names: ('get',)
+      consts: [None, 'strike', 0]
+  === get_csp_candidates (line 192) ===
+    varnames: ('db_path', 'asset_id', 'current_price', 'conn', 'query', 'df', 'e', 'candidates', 'today', '_', 'row', 'expiry_str', 'expiry', 'days_to_expiry', 'strike', 'bid', 'ask', 'mid', 'delta', 'discount_pct')
+    names: ('sqlite3', 'connect', 'pd', 'read_sql', 'Exception', 'close', 'empty', 'date', 'today', 'iterrows', 'str', 'datetime', 'strptime', 'days', 'float', 'append')
+    consts: ['从数据库获取 CSP 候选 Put 合约', 0, "\n            SELECT strike_price, expiry_date, bid_price, ask_price, delta\n            FROM options_chain\n            WHERE underlying_asset_id = ? \n              AND option_type = 'P'\n        ", ('params',), None, 'expiry_date', 10, '%Y-%m-%d', 'strike_price', 'bid_price', 0.0, 'ask_price', 2.0, 'delta', ('strike', 'expiry', 'dte', 'bid', 'mid', 'spot', 'discount_pct', 'delta')]

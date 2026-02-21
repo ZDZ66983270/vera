@@ -956,6 +956,14 @@ def save_full_snapshot(snapshot_id, symbol, as_of_date, risk_metrics,
                 INSERT INTO metric_details (snapshot_id, metric_key, value)
                 VALUES (?, ?, ?)
             """, (snapshot_id, "current_price", safe_val(current_price)))
+        
+        # Save change percent if available (can be in fundamentals or passed in)
+        change_pct = getattr(fundamentals, 'change_percent', None)
+        if change_pct is not None:
+            cursor.execute("""
+                INSERT INTO metric_details (snapshot_id, metric_key, value)
+                VALUES (?, ?, ?)
+            """, (snapshot_id, "change_percent", safe_val(change_pct)))
             
         conn.commit()
     

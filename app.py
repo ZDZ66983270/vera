@@ -4868,7 +4868,7 @@ def reconstruct_dashboard_data_from_snapshot(details):
         symbol=symbol,
         symbol_name=symbol_name,
         price=current_price,
-        change_percent=None, # Snapshot may not have daily change recorded
+        change_percent=metrics.get('change_percent'), # Recovered from metrics if available
         report_date=s['as_of_date'],
         overall_conclusion=conclusion,
         path=path,
