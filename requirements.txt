@@ -1,0 +1,13 @@
+pandas
+numpy
+streamlit
+yfinance
+PyYAML
+akshare
+pdfplumber
+
+# OCR相关依赖
+easyocr
+opencv-python
+Pillow
+plotly

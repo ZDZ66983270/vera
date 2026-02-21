@@ -1,0 +1,134 @@
+quality_profiles:
+
+  # --- Base Templates ---
+  
+  _BANK_BASE:
+    type: BANK
+    # Bank Specific Rules
+    # Metrics: Core Revenue, NPL, Coverage, Capital, Provisioning Discipline
+    flags:
+      income_stability:
+        mode: BANK_CORE_REVENUE
+        thresholds:
+          # Core Share = (NII + Fees) / Revenue
+          core_share_strong_gte: 0.70
+          core_share_weak_lt: 0.50
+          # 5Y CAGR & Vol check happens in code, threshold here is auxiliary
+          strong_cagr: 0.05
+          strong_vol: 0.25
+          
+      balance_sheet:
+        mode: BANK_CAPITAL
+        thresholds:
+          core_tier1_strong_gte: 10.5
+          core_tier1_weak_lt: 8.5
+          npl_strong_lte: 0.015  # 1.5%
+          npl_weak_gt: 0.020     # 2.0%
+          coverage_strong_gte: 2.50 # 250%
+          coverage_weak_lt: 1.50    # 150%
+          
+      provisioning_discipline:
+        mode: CREDIT_COST_ANALYSIS
+        thresholds:
+          # If credit cost (Prov/Loans) drops < 60% of historical avg while profit grows
+          credit_cost_weak_ratio: 0.60
+          profit_growth_trigger: 0.10
+          min_coverage_safe: 2.00
+          
+      regulatory_dependence:
+        mode: FIXED
+        value: HIGH
+        
+      cashflow_coverage:
+        mode: BANK_PROFIT_DIVIDEND
+        thresholds: { payout_weak_gt: 0.60 } # If payout > 60% might be unsustainable if capital low? Or check stability.
+
+  _PLATFORM_BASE:
+    type: PLATFORM
+    flags:
+      revenue_stability:
+        mode: TOTAL_REVENUE # Platforms look at total revenue usually
+        thresholds: { strong_cagr: 0.15, strong_vol: 0.20 }
+        
+      regulatory_dependence:
+        mode: FIXED
+        value: MID
+        
+      cash_conversion:
+        mode: OCF_TO_NI
+        thresholds:
+          strong_gte: 1.0
+          weak_lt: 0.8
+          critical_lt: 0.5
+          
+      gross_margin_stability:
+        mode: GM_STD_DEV
+        thresholds:
+          strong_std_lte: 0.02 # Very stable
+          weak_std_gt: 0.05
+          
+      roic_trend:
+        mode: CURRENT_VS_3Y
+        thresholds: { increasing_buffer: 0.01 } # +1% improvement
+
+      piotroski_f_score:
+        mode: STANDARD
+        thresholds: { strong_gte: 7, weak_lte: 3 }
+
+  _GENERIC_BASE:
+    type: GENERIC
+    flags:
+      revenue_stability:
+        mode: TOTAL_REVENUE
+        thresholds: { strong_cagr: 0.08, strong_vol: 0.15 }
+        
+      regulatory_dependence:
+        mode: SECTOR_MAP
+        
+      cash_conversion:
+        mode: OCF_TO_NI
+        thresholds: { strong_gte: 1.0, weak_lt: 0.8, critical_lt: 0.5 }
+        
+      gross_margin_stability:
+        mode: GM_STD_DEV
+        thresholds: { strong_std_lte: 0.03, weak_std_gt: 0.06 }
+        
+      roic_trend:
+        mode: CURRENT_VS_3Y
+
+      piotroski_f_score:
+        mode: STANDARD
+        thresholds: { strong_gte: 7, weak_lte: 3 }
+
+  # --- Industry Mappings (Inheritance) ---
+
+  # Banks
+  "Bank": { base: _BANK_BASE }
+  "Banks": { base: _BANK_BASE }
+  "Diversified Banks": { base: _BANK_BASE }
+  "Regional Banks": { base: _BANK_BASE }
+
+  # Financials acting like Banks
+  "Thrifts & Mortgage Finance": { base: _BANK_BASE }
+  
+  # Insurance / Capital Markets - Maybe share some bank logic or Generic?
+  # Prompt said "Financials -> Reg High". 
+  "Insurance": 
+    base: _GENERIC_BASE
+    flags: 
+      regulatory_dependence: { mode: FIXED, value: HIGH }
+      
+  "Capital Markets":
+    base: _GENERIC_BASE
+    flags:
+      regulatory_dependence: { mode: FIXED, value: HIGH }
+
+  # Platforms
+  "Media & Entertainment": { base: _PLATFORM_BASE }
+  "Interactive Media & Services": { base: _PLATFORM_BASE }
+  "Internet & Direct Marketing Retail": { base: _PLATFORM_BASE }
+  "Software": { base: _PLATFORM_BASE }
+  "IT Services": { base: _PLATFORM_BASE }
+
+  # Fallback
+  "__GENERIC__": { base: _GENERIC_BASE }

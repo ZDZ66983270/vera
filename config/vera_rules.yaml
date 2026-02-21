@@ -1,0 +1,456 @@
+version: 1.0
+updated_at: "2026-01-11"
+
+########################################################
+# 1. 估值状态映射表 (Valuation Status: percentile → label)
+########################################################
+valuation:
+  metric: "vera_pe_ttm_pctile"      # 0–100, 越高越贵
+  direction: "higher_is_more_expensive"
+
+  min_history_points: 60   # 至少 60 个历史 PE 点（例如 5 年月度）
+
+  special_states:
+    NO_PE:
+      key: "NO_PE"
+      label_zh: "估值暂不可用"
+      label_en: "Valuation N/A"
+      bucket: "NEUTRAL"
+    INSUFFICIENT_HISTORY:
+      key: "INSUFFICIENT_HISTORY"
+      label_zh: "历史样本不足"
+      label_en: "Insufficient history"
+      bucket: "NEUTRAL"
+
+  bands:
+    - key: DEEP_UNDERVALUE
+      range: [0, 15]                # [0,15)
+      label_zh: "低估/深度"
+      label_en: "Undervalued / Deep"
+      color: "#1D976C"
+
+    - key: FAIR_LOW
+      range: [15, 35]               # [15,35)
+      label_zh: "合理偏低"
+      label_en: "Fair-Low"
+      color: "#33B37B"
+
+    - key: FAIR
+      range: [35, 75]               # [35,75)
+      label_zh: "合理"
+      label_en: "Fairly Valued"
+      color: "#999999"
+
+    - key: OVERVALUE
+      range: [75, 90]               # [75,90)
+      label_zh: "高估"
+      label_en: "Overvalued"
+      color: "#E67E22"
+
+    - key: EXTREME_OVERVALUE
+      range: [90, 100]              # [90,100]
+      label_zh: "严重高估"
+      label_en: "Extremely Overvalued"
+      color: "#C0392B"
+
+  # 估值 Bucket，供行为矩阵使用（避免 5×… 维度爆炸）
+  buckets:
+    CHEAP:
+      bands: ["DEEP_UNDERVALUE"]
+    NEUTRAL:
+      bands: ["FAIR_LOW", "FAIR"]
+    EXPENSIVE:
+      bands: ["OVERVALUE", "EXTREME_OVERVALUE"]
+
+
+########################################################
+# 2. 象限判定表 (PositionBin × PathBin → Q1–Q4)
+########################################################
+quadrant:
+
+  # 2.1 位置分位 → HIGH / LOW
+  position_bin:
+    metric: "position_10y_pctile"   # 0–100
+    high_gte: 60                    # >= 60 视为高位，其余为低位
+
+  # 2.2 路径结构 (D-State) → STABLE / FRAGILE
+  path_bin:
+    fragile_states: ["D3", "D4", "D5"]
+    stable_states: ["D0", "D1", "D2", "D6"]
+
+  # 2.3 组合矩阵
+  matrix:
+    - position: HIGH
+      path: STABLE
+      quadrant: Q1
+      label_zh: "Q1 追涨区"
+      label_en: "Q1 Momentum Zone"
+      color: "#E67E22"
+      desc_zh: "价格处于相对高位，结构稳定，上涨趋势未被破坏；主要风险在于追高被套。"
+      desc_en: "Price is high but structure is still stable; main risk is buying into momentum at elevated levels."
+
+    - position: HIGH
+      path: FRAGILE
+      quadrant: Q2
+      label_zh: "Q2 泡沫区"
+      label_en: "Q2 Bubble Zone"
+      color: "#C0392B"
+      desc_zh: "价格高位且结构脆弱，容易形成顶部或二次杀跌，是全局风险最高区域。"
+      desc_en: "High price and fragile structure; elevated risk of topping and sharp drawdowns."
+
+    - position: LOW
+      path: FRAGILE
+      quadrant: Q3
+      label_zh: "Q3 恐慌区"
+      label_en: "Q3 Panic Zone"
+      color: "#8E44AD"
+      desc_zh: "价格在低位但结构仍然脆弱，左侧抄底区，风险在于“底部下还有底”。"
+      desc_en: "Low price but fragile structure; left-tail buying zone with risk of further downside."
+
+    - position: LOW
+      path: STABLE
+      quadrant: Q4
+      label_zh: "Q4 稳态区"
+      label_en: "Q4 Stable Zone"
+      color: "#27AE60"
+      desc_zh: "价格不高且结构稳定，适合右侧上车或者长期持有。"
+      desc_en: "Reasonable or low price with stable structure; suitable for gradual accumulation or holding."
+
+
+########################################################
+# 3. 行为建议矩阵
+#    (D-State × Quadrant × ValuationBucket × Quality → Action)
+########################################################
+behavior:
+
+  # 3.1 D-State 分组，降低组合维度
+  d_state_groups:
+    NO_STRUCTURE: ["D0"]
+    NORMAL: ["D1", "D2"]
+    DRAW_DOWN: ["D3", "D4", "D5", "D2_STRUCTURAL_PULLBACK"]
+    FULLY_RECOVERED: ["D6"]
+
+  # 3.2 Quality Buffer Bucket（统一各种质量标签）
+  # 如果质量引擎输出 HIGH/MID/LOW：
+  #   - HIGH   → STRONG
+  #   - MID    → AVERAGE
+  #   - LOW    → WEAK
+  # 如果输出 STRONG/MODERATE/WEAK：
+  #   - STRONG   → STRONG
+  #   - MODERATE → AVERAGE
+  #   - WEAK     → WEAK
+  quality_buckets:
+    STRONG: ["HIGH", "STRONG"]
+    AVERAGE: ["MID", "MODERATE"]
+    WEAK: ["LOW", "WEAK"]
+
+  # 3.3 行为规则（按优先级从高到低匹配）
+  rules:
+    # 3.3.0 D2 结构性回调特殊规则 (新增)
+    - name: "D2 structural pullback - limit CSP"
+      priority: 110
+      when:
+        d_state_group: ["DRAW_DOWN"]
+        quadrant: ["Q1", "Q2"]
+        valuation_bucket: ["NEUTRAL", "EXPENSIVE"]
+        quality_bucket: ["AVERAGE", "STRONG"]
+      action:
+        code: "LIMITED_CSP_DEEP_OTM"
+        label_zh: "仅卖深度虚值 Put，控制仓位"
+        label_en: "Only deep OTM puts with limited size"
+        note_zh: "当前处于结构性回调，建议仅在理想持股价附近小规模卖 Put，避免在前高附近激进加仓。"
+        note_en: "Structural pullback in progress; restrict CSP to deep OTM strikes near entry targets, avoid aggressive additions."
+
+    # 3.3.1 极端高估 + 泡沫/追涨区：强烈风险区域
+    - name: "Extreme bubble - hard ban"
+      priority: 100
+      when:
+        d_state_group: ["NORMAL", "DRAW_DOWN", "FULLY_RECOVERED"]
+        quadrant: ["Q1", "Q2"]
+        valuation_bucket: ["EXPENSIVE"]
+        quality_bucket: ["WEAK", "AVERAGE"]
+      action:
+        code: "NO_NEW_POSITION"
+        label_zh: "禁止开仓"
+        label_en: "No new positions"
+        note_zh: "估值严重偏贵且处于追涨/泡沫区，建议不加仓，已有仓位考虑减仓或对冲。"
+        note_en: "Extremely expensive valuation in momentum/bubble zone; avoid adding exposure, consider trimming/hedging."
+
+    # 3.3.2 大幅下跌尚未修复 + 结构脆弱：保护本金优先
+    - name: "Ongoing crash - capital preservation"
+      priority: 90
+      when:
+        d_state_group: ["DRAW_DOWN"]
+        quadrant: ["Q2", "Q3"]
+        valuation_bucket: ["NEUTRAL", "EXPENSIVE"]
+        quality_bucket: ["WEAK", "AVERAGE", "STRONG"]
+      action:
+        code: "CAPITAL_PRESERVATION"
+        label_zh: "以防守为主"
+        label_en: "Capital preservation"
+        note_zh: "处于深度回撤且结构脆弱，优先考虑仓位控制和流动性安全。"
+        note_en: "Deep drawdown with fragile structure; focus on position control and liquidity."
+
+    # 3.3.3 恐慌区 + 便宜 + 质量尚可：左侧布局机会
+    - name: "Panic but cheap with quality"
+      priority: 80
+      when:
+        d_state_group: ["DRAW_DOWN"]
+        quadrant: ["Q3"]
+        valuation_bucket: ["CHEAP"]
+        quality_bucket: ["AVERAGE", "STRONG"]
+      action:
+        code: "SCALE_IN_LEFT"
+        label_zh: "谨慎左侧分批建仓"
+        label_en: "Cautious scale-in (left side)"
+        note_zh: "估值便宜且质量尚可，但仍在恐慌区，建议小仓位、分批试探。"
+        note_en: "Cheap with acceptable quality in panic zone; consider small, staged entries."
+
+    # 3.3.4 稳态区 + 估值合理/便宜：右侧上车
+    - name: "Stable zone - constructive"
+      priority: 70
+      when:
+        d_state_group: ["NORMAL", "FULLY_RECOVERED"]
+        quadrant: ["Q4"]
+        valuation_bucket: ["CHEAP", "NEUTRAL"]
+        quality_bucket: ["AVERAGE", "STRONG"]
+      action:
+        code: "SCALE_IN_RIGHT"
+        label_zh: "右侧分批建仓/持有"
+        label_en: "Scale-in or hold (right side)"
+        note_zh: "结构稳定且估值不贵，适合中长期持有或逐步加仓。"
+        note_en: "Stable structure with fair/cheap valuation; suitable for gradual accumulation or holding."
+
+    # 3.3.5 高位追涨区但估值不贵：以仓位控制为主
+    - name: "Momentum but not too expensive"
+      priority: 60
+      when:
+        d_state_group: ["NORMAL", "FULLY_RECOVERED"]
+        quadrant: ["Q1"]
+        valuation_bucket: ["CHEAP", "NEUTRAL"]
+        quality_bucket: ["AVERAGE", "STRONG"]
+      action:
+        code: "HOLD_OR_LIGHTEN"
+        label_zh: "控制仓位，持有为主"
+        label_en: "Hold with position control"
+        note_zh: "高位但估值不算离谱，建议不再明显加仓，重点控制整体仓位。"
+        note_en: "High price but not extremely expensive; avoid aggressive additions, manage exposure."
+
+    # 3.3.6 默认：中性观察
+    - name: "Default neutral"
+      priority: 0
+      when:
+        d_state_group: ["NO_STRUCTURE", "NORMAL", "DRAW_DOWN", "FULLY_RECOVERED"]
+        quadrant: ["Q1", "Q2", "Q3", "Q4"]
+        valuation_bucket: ["CHEAP", "NEUTRAL", "EXPENSIVE"]
+        quality_bucket: ["WEAK", "AVERAGE", "STRONG"]
+      action:
+        code: "WATCH"
+        label_zh: "观望为主"
+        label_en: "Watch / no strong view"
+        note_zh: "信号不构成明显行动建议，保持观望。"
+        note_en: "No strong composite signal; stay observant."
+
+
+########################################################
+# 4. 分红安全引擎 (Dividend Safety Engine)
+########################################################
+dividend_safety:
+  payout_ratio_ttm:
+    strong_max: 0.7      # <= 70% 安全
+    weak_min: 1.0        # >= 100% 且持续为危险信号
+
+  dps_volatility:
+    strong_max: 0.25     # std/mean <= 0.25 稳定
+    weak_min: 0.6        # >= 0.6 极不稳定
+
+  cut_years:
+    strong_max: 1        # 10 年内最多 1 次减/停派
+    weak_min: 3          # >=3 次视为负面
+
+  recovery_progress:
+    early_max: 0.4       # <=40% 恢复早期
+    mid_max: 0.8         # 40–80% 恢复中段
+    full_min: 0.8        # >=80% 基本恢复
+
+  scoring:
+    payout_weight: 0.4
+    stability_weight: 0.3
+    cut_weight: 0.2
+    recovery_weight: 0.1
+
+  bands:
+    - key: STRONG
+      min_score: 0.75
+      label_zh: "高"
+      desc_zh: "盈利覆盖充足、分红历史稳定，可相对信赖股息。"
+
+    - key: MEDIUM
+      min_score: 0.4
+      label_zh: "中"
+      desc_zh: "总体尚可，需关注盈利波动与监管政策。"
+
+    - key: WEAK
+      min_score: 0.0
+      label_zh: "低"
+      desc_zh: "历史有明显减/停派或盈利覆盖不足，股息可持续性存疑。"
+
+
+########################################################
+# 5. 盈利周期状态 (Earnings Cycle State)
+########################################################
+earnings_state:
+  thresholds:
+    growth_strong: 0.15      # EPS YoY > +15% 为强增长
+    growth_moderate: 0.05    # 5–15% 温和增长
+    decline_mild: -0.05      # -5–0% 轻微下滑
+    decline_deep: -0.20      # < -20% 深度下滑
+  min_trend_quarters: 2      # 至少连续 2 季
+
+  labels:
+    E0:
+      label_zh: "无结构"
+      desc_zh: "财报历史不足，暂无法判断盈利周期。"
+    E1:
+      label_zh: "盈利扩张早期"
+      desc_zh: "EPS 同比连续多季显著增长，处于扩张早期。"
+    E2:
+      label_zh: "盈利稳定高位"
+      desc_zh: "EPS 同比围绕 0–中低速增长波动，盈利进入平稳阶段。"
+    E3:
+      label_zh: "增长放缓"
+      desc_zh: "在较高基数后增速下滑，增长动能减弱。"
+    E4:
+      label_zh: "盈利下滑"
+      desc_zh: "EPS 同比转负且持续，下行压力加大。"
+    E5:
+      label_zh: "亏损/深度下滑"
+      desc_zh: "EPS 连续大幅为负或显著恶化，处于深度下滑阶段。"
+    E6:
+      label_zh: "盈利修复"
+      desc_zh: "从下滑/亏损阶段恢复为正，且持续多个季度。"
+
+########################################################
+# 6. 回撤风险叠加规则 (Risk Overlay - Drawdown)
+########################################################
+risk_overlay:
+  drawdown:
+    lookback_years: 10
+    current_dd_warn: -0.10          # 超过 -10% 提示「中度回撤」
+    current_dd_severe: -0.25        # 超过 -25% 提示「重度回撤」
+    strength_structural_min: 0.50   # 当前回撤 >= 50% MaxDD 视为「结构性回调」
+    
+    # 新增：近 1 年回撤周期
+    recent_cycle:
+      lookback_days: 252  # 默认 1 年
+
+      # 将「回撤/年波动率」分桶（单位：sigma 倍）
+      amp_sigma_bands:
+        - key: A0_FLAT
+          label_zh: "无明显回撤"
+          range: [0.0, 0.5]
+        - key: A1_SHALLOW
+          label_zh: "浅度回撤"
+          range: [0.5, 1.0]
+        - key: A2_STRUCTURAL
+          label_zh: "结构性回调"
+          range: [1.0, 1.8]
+        - key: A3_DEEP
+          label_zh: "深度回调"
+          range: [1.8, 3.0]
+        - key: A4_EXTREME
+          label_zh: "极端回撤"
+          range: [3.0, 99.0]
+
+      # 回撤持续时间维度（交易日）
+      duration_bands:
+        - key: T0_BRIEF
+          label_zh: "短期波动"
+          range: [0, 20]
+        - key: T1_INTERMEDIATE
+          label_zh: "中期调整"
+          range: [20, 60]
+        - key: T2_PROLONGED
+          label_zh: "长期承压"
+          range: [60, 252]
+
+      # 幅度 × 时间 → 近期周期状态
+      state_matrix:
+        - state: R0_NORMAL
+          label_zh: "正常波动期"
+          amp_in: ["A0_FLAT", "A1_SHALLOW"]
+          dur_in: ["T0_BRIEF"]
+
+        - state: R1_PULLBACK
+          label_zh: "短期回落"
+          amp_in: ["A1_SHALLOW", "A2_STRUCTURAL"]
+          dur_in: ["T0_BRIEF", "T1_INTERMEDIATE"]
+
+        - state: R2_STRUCTURAL
+          label_zh: "结构性回调"
+          amp_in: ["A2_STRUCTURAL", "A3_DEEP"]
+          dur_in: ["T1_INTERMEDIATE", "T2_PROLONGED"]
+
+        - state: R3_DEEP_BEAR
+          label_zh: "深度调整"
+          amp_in: ["A3_DEEP", "A4_EXTREME"]
+          dur_in: ["T1_INTERMEDIATE", "T2_PROLONGED"]
+
+        - state: R4_CRISIS
+          label_zh: "极端危机"
+          amp_in: ["A4_EXTREME"]
+          dur_in: ["T2_PROLONGED"]
+
+########################################################
+# 7. D-State 状态标签与描述 (D-State labels)
+########################################################
+d_state:
+  labels:
+    D0:
+      label_zh: "无明显回撤"
+      label_en: "Stable"
+      desc_zh: "处于历史高位附近，结构极度稳定。"
+      desc_en: "Trading near all-time highs with extremely stable structure."
+    D1:
+      label_zh: "正常波动"
+      label_en: "Normal Fluctuation"
+      desc_zh: "常规良性回撤或高位震荡。"
+      desc_en: "Regular minor pullback or high-level consolidation."
+    D2:
+      label_zh: "结构受压"
+      label_en: "Moderate Drawdown"
+      desc_zh: "回撤进入 15-25% 区间，多空力量开始博弈。"
+      desc_en: "Drawdown in 15-25% range, neutral building tension."
+    D2_STRUCTURAL_PULLBACK:
+      label_zh: "结构性回调"
+      label_en: "Structural Pullback"
+      desc_zh: "上一轮大回撤已修复，但自新高再次出现中到重度回撤，趋势仍未稳定。"
+      desc_en: "Previous drawdown fully recovered, but a new mid-to-deep pullback from recent highs is in progress."
+    D3:
+      label_zh: "深度回撤"
+      label_en: "Deep Drawdown"
+      desc_zh: "回撤深度超过 35%，处于历史极端底部或脆弱博弈区。"
+      desc_en: "Deep drawdown beyond 35%, in extreme valley or fragile zone."
+    D4:
+      label_zh: "反弹早期"
+      label_en: "Early Recovery"
+      desc_zh: "从低点反弹，但结构仍然脆弱，可能面临二次探底。"
+      desc_en: "Bouncing from lows but structure remains fragile with re-test risks."
+    D5:
+      label_zh: "修复中段"
+      label_en: "Mid Recovery"
+      desc_zh: "价格逐步站稳，修复进度良好，风险开始下降。"
+      desc_en: "Price stabilizing with solid recovery progress, risk decreasing."
+    D6:
+      label_zh: "完全修复"
+      label_en: "Fully Recovered"
+      desc_zh: "价格已基本回到前高，结构进入新一轮扩张的前站。"
+      desc_en: "Price back to prior peaks, preparing for new expansion cycle."
+# 高级风险分析配置
+risk_analytics:
+  heavy_dd_threshold: -0.25 # 重大回撤判定阈值 (已过时，保留兼容)
+  crash_window_days: 30     # 短期暴跌统计窗口 (30天)
+  dd_buckets:
+    A: { threshold: -0.30, label: "重度回撤" }
+    B: { threshold: -0.20, label: "中度回撤" }
+    C: { threshold: 0.0,   label: "轻度回撤" }

@@ -1,0 +1,42 @@
+# VERA Security & Backup Strategy Exclusions
+# Defined in backup.md
+
+# 1. Database files & logs
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# 2. Running Logs
+*.log
+
+# 3. Source Data & Documents
+*.csv
+*.pdf
+
+# 4. Historical Backups
+backups/
+*.bak*
+*.backup*
+*.tar.gz
+*.zip
+*.csv.*
+*.db.*
+
+# 5. Environment & Caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 6. System & Others
+.DS_Store
+.streamlit/secrets.toml
+outputs/
+output_V4/
+proceeded/
+
+# 7. Note on GitHub commits (As per strategy):
+# Ensure only source code (*.py), configs, and docs (*.md) are committed.

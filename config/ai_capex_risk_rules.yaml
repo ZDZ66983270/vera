@@ -1,0 +1,71 @@
+# config/ai_capex_risk_rules.yaml
+
+activation:
+  # 1) 行业白名单 / 黑名单
+  sector_whitelist:
+    - "Information Technology"
+    - "Communication Services"
+    - "Consumer Discretionary"
+  industry_blacklist:
+    - "Banks"
+    - "Insurance"
+    - "Real Estate"
+    - "Closed-End Fund"
+    - "ETF"
+    - "Mutual Fund"
+
+  # 2) 必须字段（缺任何一个就不跑该模块）
+  required_fields:
+    - capex_cash_additions_6m
+    - revenue_ttm
+    - total_assets
+
+  # 3) “AI 基建投入足够有料” 才有意义
+  min_capex_to_revenue: 0.08        # 近 6 个月 CapEx*2 / 收入 TTM >= 8% 才认为“CapEx 明显”
+  min_ppe_growth_yoy: 0.10          # PPE 年增速 >= 10%（可选，如果拿得到）
+  min_ai_commit_to_assets: 0.10     # 未开始数据中心租赁 / 总资产 >= 10%（有数据才检查）
+
+  # 4) tag 覆盖（由 universe 或资产主表配置）
+  enable_if_tags_any:
+    - "AI_INFRA_CORE"
+    - "HYPERSCALER"
+  disable_if_tags_any:
+    - "HOLDING_ONLY"
+    - "FINANCIAL_INSTITUTION"
+
+thresholds:
+  # 1) CapEx 强度 (CapEx TTM Approx / Revenue TTM)
+  capex_intensity:
+    high_gte: 0.20
+    medium_gte: 0.12
+  
+  # 2) 折旧拖累 (Depreciation PPE TTM Approx / Operating Income TTM)
+  depreciation_drag:
+    high_gte: 0.40
+    medium_gte: 0.25
+
+  # 3) 表外承诺强度 (Data Center Leases Committed / Total Assets)
+  off_balance_commitment:
+    high_gte: 0.30
+    medium_gte: 0.15
+
+  # 4) 租赁型 CapEx 占比 (Finance Lease Additions / Total CapEx Additions)
+  lease_capex_share:
+    high_gte: 0.30
+    medium_gte: 0.15
+
+buckets:
+  # 风险等级对应的文案和 UI 色调
+  overall_risk:
+    HIGH:
+      label_zh: "AI 基建负担重"
+      tone: "danger"
+    MEDIUM:
+      label_zh: "AI 基建投入活跃"
+      tone: "warning"
+    LOW:
+      label_zh: "AI 基建负担可控"
+      tone: "success"
+    INFO:
+      label_zh: "AI 投入初期"
+      tone: "info"
