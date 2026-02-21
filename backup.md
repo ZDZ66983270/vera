@@ -20,5 +20,6 @@
 
 ## 4. 远程备份到 GitHub
 除了在本地 `backups/` 目录进行留痕外，代码的进展还必须同步备份到远程的 GitHub 代码仓库中。
+*   **远程官方仓库地址 (VERA Backend)**: [https://github.com/ZDZ66983270/vera](https://github.com/ZDZ66983270/vera)
 *   仅提交 Python 源代码 (`*.py`)、配置文件、说明文档 (`*.md`) 以及其他构建项目必需的核心文件。
 *   上述“备份排除内容”（如 `*.db`, `*.csv` 及 `backups/` 自身）**必须在项目根目录的 `.gitignore` 文件中明确声明**，杜绝大体积或敏感数据文件污染至 Git 的提交历史中。
