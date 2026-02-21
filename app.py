@@ -5149,9 +5149,18 @@ def render_batch_evaluation_dashboard():
     st.info("选择市场以全量对本系统内的个股进行评估，并保存结果到历史记录队列。")
     
     st.markdown("##### 选择目标市场 (Select Market)")
+    
+    def toggle_all_markets():
+        val = st.session_state.chk_mkt_all
+        st.session_state.chk_mkt_hk = val
+        st.session_state.chk_mkt_us = val
+        st.session_state.chk_mkt_cn = val
+
+    st.checkbox("☑️ 全选 (Select All)", value=False, key="chk_mkt_all", on_change=toggle_all_markets)
+
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.checkbox("🇭🇰 HK (港股)", value=True, key="chk_mkt_hk")
+        st.checkbox("🇭🇰 HK (港股)", value=False, key="chk_mkt_hk")
     with col2:
         st.checkbox("🇺🇸 US (美股)", value=False, key="chk_mkt_us")
     with col3:
