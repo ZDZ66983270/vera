@@ -923,7 +923,32 @@ def save_full_snapshot(snapshot_id, symbol, as_of_date, risk_metrics,
         cursor.execute("""
             INSERT INTO metric_details (snapshot_id, metric_key, value)
             VALUES (?, ?, ?)
+        """, (snapshot_id, "pe_static", safe_val(fundamentals.pe_static)))
+        
+        cursor.execute("""
+            INSERT INTO metric_details (snapshot_id, metric_key, value)
+            VALUES (?, ?, ?)
         """, (snapshot_id, "pb_ratio", safe_val(fundamentals.pb_ratio)))
+
+        cursor.execute("""
+            INSERT INTO metric_details (snapshot_id, metric_key, value)
+            VALUES (?, ?, ?)
+        """, (snapshot_id, "ps_ratio", safe_val(getattr(fundamentals, 'ps_ratio', None))))
+
+        cursor.execute("""
+            INSERT INTO metric_details (snapshot_id, metric_key, value)
+            VALUES (?, ?, ?)
+        """, (snapshot_id, "dividend_yield", safe_val(fundamentals.dividend_yield)))
+
+        cursor.execute("""
+            INSERT INTO metric_details (snapshot_id, metric_key, value)
+            VALUES (?, ?, ?)
+        """, (snapshot_id, "buyback_ratio", safe_val(fundamentals.buyback_ratio)))
+
+        cursor.execute("""
+            INSERT INTO metric_details (snapshot_id, metric_key, value)
+            VALUES (?, ?, ?)
+        """, (snapshot_id, "eps_ttm", safe_val(fundamentals.eps_ttm)))
 
         # 5. Current Price (Critical for Snapshot View)
         if current_price is not None:

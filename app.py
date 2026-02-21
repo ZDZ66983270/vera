@@ -4658,7 +4658,19 @@ def reconstruct_dashboard_data_from_snapshot(details):
     quality = {}
     if not details['quality'].empty:
         quality = details['quality'].iloc[0].to_dict()
-        
+        # Parse notes JSON
+        import json
+        notes_raw = quality.get('notes')
+        if notes_raw and isinstance(notes_raw, str):
+            try:
+                notes_dict = json.loads(notes_raw)
+                if isinstance(notes_dict, dict):
+                    # Map dividend_notes specifically as expected by UI
+                    if 'dividend_notes' in notes_dict:
+                        quality['dividend_notes'] = notes_dict['dividend_notes']
+                    quality.update(notes_dict)
+            except:
+                pass
     # 5. Behavior Flags
     behavior_flags = []
     if not details['behavior'].empty:
@@ -4793,24 +4805,40 @@ def reconstruct_dashboard_data_from_snapshot(details):
     elif val_status == "Extremely Overvalued": val_key = "EXTREME_OVERVALUE"
     
     value = {
-        'current_pe': metrics.get('pe_ttm'),
-        'current_pe_static': metrics.get('pe_static'),
-        'current_pb': metrics.get('pb_ratio'),
+        'pe_ttm': metrics.get('pe_ttm'),
+        'pe_static': metrics.get('pe_static'),
+        'pb': metrics.get('pb_ratio'),
+        'ps': metrics.get('ps_ratio'),
+        'eps_ttm': metrics.get('eps_ttm'),
+        'dividend_yield': metrics.get('dividend_yield'),
+        'buyback_ratio': metrics.get('buyback_ratio'),
         'valuation_status': val_status,
         'valuation_status_key': val_key,
-        'pe_percentile': risk_card.get('pe_percentile') # risk_card often holds PE pct too? Check schema
+        'anchor_metric': s.get('valuation_anchor', 'PE'),
+        'pe_percentile': metrics.get('pe_percentile') or risk_card.get('pe_percentile')
     }
     # If valuation status details were stored in metrics or specific table, map them here.
     # For now, simplistic mapping.
     
-    # 8. Path (Reconstruct from risk_card)
+    # 8. Path & Position (Reconstruct from risk_card)
     path = {
-        'has_new_high': False # Default, unless stored
+        'has_new_high': False,
+        'path_risk_level': risk_card.get('path_zone', 'MID'),
+        'path_interpretation': risk_card.get('path_interpretation'),
+        'state': risk_card.get('state') or ov_row.get('ind_dd_state') if 'ov_row' in locals() else None
     }
     # Try to infer new high from recovery_progress
     if risk_card.get('recovery_progress', 0) >= 1.0:
         path['has_new_high'] = True
         
+    # Rebuild Position Card
+    from analysis.dashboard import _build_position_card
+    raw_pos = {
+        "price_percentile": risk_card.get("price_percentile"),
+        "progress": risk_card.get("drawdown_stage"),
+        "drawdown": metrics.get("current_drawdown")
+    }
+    position_card = _build_position_card(raw_pos)
     # 9. Market Environment
     # Often stored in overlay in flat structure or separate text
     market_env = {
@@ -4844,7 +4872,7 @@ def reconstruct_dashboard_data_from_snapshot(details):
         report_date=s['as_of_date'],
         overall_conclusion=conclusion,
         path=path,
-        position={}, # risk_card has position_zone, stored in overlay['individual']
+        position=position_card, 
         market_environment=market_env,
         value=value,
         overlay=overlay,
