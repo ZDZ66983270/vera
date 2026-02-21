@@ -1,69 +1,46 @@
-# vera/engines/permission_engine.py
+from .permission_engine import PermissionEngine
 
-class PermissionEngine:
+class CSPPermissionEngine:
     """
-    融合 U_state + O_state
-    输出最终 R_state + 动作许可
+    CSP 策略专用评估引擎，对接 dashboard 数据
     """
-
-    def evaluate(self, U_state: str, O_state: str) -> dict:
-        # 一票否决权 (U3 is always RED)
-        if U_state == "U3_DISCOVERY":
-            return self._red_state("Price discovery phase (U3)")
-
-        if U_state == "U4_STABILIZATION":
-            return self._yellow_state("Stabilization phase (U4)")
-
-        # Green Light Conditions
-        # Reversal OR Range, combined with IV Crush (Efficiency Window)
-        if U_state in ["U5_REVERSAL", "U2_RANGE"] and O_state == "O3_IV_CRUSH":
-            return self._green_state(f"{U_state} with IV Crush")
-
-        # Default to YELLOW (Transition or Mixed signals)
-        return self._yellow_state(f"Transition state ({U_state} + {O_state})")
-
-    def _red_state(self, reason):
-        return {
-            "R_state": "RED",
-            "summary_label_zh": "禁止操作",
-            "summary_note_zh": "处于价格发现期且波动率极高，建议观望，不开任何新仓。",
-            "allowed_actions": {
-                "buy_underlying": False,
-                "sell_put_csp": False,
-                "roll_put": False
-            },
-            "reason": reason
+    
+    @staticmethod
+    def evaluate_from_dashboard(data) -> dict:
+        """
+        从 DashboardData 对象评估 CSP 策略权限和指标
+        """
+        # 1. 提取 U_state 和 O_state
+        u_state = "U2_RANGE"
+        if hasattr(data, 'underlying') and data.underlying:
+             u_state = data.underlying.get('U_state', "U2_RANGE")
+        elif hasattr(data, 'path') and data.path:
+             # Fallback to D_state or similar if U_state not available
+             u_state = data.path.get('state', "U2_RANGE")
+             
+        o_state = "O2_PLATEAU"
+        if hasattr(data, 'options') and data.options:
+             o_state = data.options.get('O_state', "O2_PLATEAU")
+             
+        # 2. 调用标准权限引擎
+        pe = PermissionEngine()
+        result = pe.evaluate(u_state, o_state)
+        
+        # 3. 补充 CSP 专用指标
+        # 这里的 current_price 是审计合约时的基准
+        current_price = getattr(data, 'price', 0.0)
+        
+        # 构造 metrics 字典
+        metrics = {
+            'current_price': current_price,
+            'u_state': u_state,
+            'o_state': o_state,
         }
-
-    def _yellow_state(self, reason):
+        
+        # 将 pe 的结果包装进返回对象
         return {
-            "R_state": "YELLOW",
-            "summary_label_zh": "谨慎观察",
-            "summary_note_zh": "市场结构尚未确立，抛压虽衰竭但动能不足，建议保持轻仓或观望。",
-            "allowed_actions": {
-                "buy_underlying": False,
-                "sell_put_csp": False,
-                "roll_put": False
-            },
-            "constraints": {
-                 "note": "Observation only. Strict risk control."
-            },
-            "reason": reason
-        }
-
-    def _green_state(self, reason):
-        return {
-            "R_state": "GREEN",
-            "summary_label_zh": "参与交易",
-            "summary_note_zh": "反转确认且波动率收敛，属于高效参与窗口，可按策略建仓。",
-            "allowed_actions": {
-                "buy_underlying": True,
-                "sell_put_csp": True,
-                "roll_put": True
-            },
-            "constraints": {
-                "min_dte": 60,
-                "note": "Apply strategy-specific debit/strike rules"
-            },
-            "reason": reason
+            'R_state': result['R_state'],
+            'metrics': metrics,
+            'allowed_actions': result['allowed_actions'],
+            'reason': result.get('reason', '')
         }

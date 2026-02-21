@@ -369,7 +369,10 @@ def generate_dashboard_data(
                        balance_sheet_flag, cashflow_coverage_flag, leverage_risk_flag,
                        revenue_stability_flag, cyclicality_flag, moat_proxy_flag,
                        payout_consistency_flag, dilution_risk_flag, regulatory_dependence_flag,
-                       quality_template_name
+                       quality_template_name,
+                       dividend_safety_level, dividend_safety_label_zh,
+                       earnings_state_code, earnings_state_label_zh, earnings_state_desc_zh,
+                       notes
                 FROM quality_snapshot
                 WHERE asset_id = ?
                 ORDER BY created_at DESC
@@ -377,6 +380,15 @@ def generate_dashboard_data(
             """, (symbol,))
             row = cursor.fetchone()
             if row:
+                import json
+                notes_raw = row[17]
+                notes_dict = {}
+                if notes_raw:
+                    try:
+                        notes_dict = json.loads(notes_raw)
+                    except:
+                        pass
+                
                 quality_data = {
                     "quality_buffer_level": row[0],
                     "quality_summary": row[1],
@@ -389,10 +401,17 @@ def generate_dashboard_data(
                     "payout_consistency_flag": row[8],
                     "dilution_risk_flag": row[9],
                     "regulatory_dependence_flag": row[10],
-                    "quality_template_name": row[11]
+                    "quality_template_name": row[11],
+                    
+                    "dividend_safety_level": row[12],
+                    "dividend_safety_label_zh": row[13],
+                    "earnings_state_code": row[14],
+                    "earnings_state_label_zh": row[15],
+                    "earnings_state_desc_zh": row[16],
+                    "dividend_notes": notes_dict.get("dividend_notes", [])
                 }
         except Exception as e:
-            print(f"Note: Quality snapshot not found (this is OK for MVP): {e}")
+            print(f"Note: Quality snapshot extraction failed: {e}")
         finally:
             if conn:
                 conn.close()
