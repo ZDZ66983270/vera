@@ -3435,6 +3435,7 @@ def render_asset_management():
         key="universe_editor_final_fixed_v2", 
         num_rows="dynamic",
         use_container_width=True,
+        height=1000,
         column_config={
             "primary_symbol": st.column_config.TextColumn("输入代码", help="原始代码 (如 700, 3690)"),
             "asset_id": st.column_config.TextColumn("典范代码", help="标准化 ID", disabled=True),
@@ -4463,7 +4464,7 @@ def render_data_import_page():
                 use_container_width=True, 
                 key="single_import_editor",
                 hide_index=True,
-                height=600  # Increased height to show more rows
+                height=1000  # Increased to show ~30 rows
             )
             # Reconstruct dict from edited dataframe
             for _, row in edited_df.iterrows():
@@ -4558,7 +4559,7 @@ def render_data_import_page():
                         key=f"multi_editor_{selected_idx}",
                         hide_index=True,
                         use_container_width=True,
-                        height=min(800, len(d_rows) * 35 + 50)
+                        height=min(1000, len(d_rows) * 35 + 50)
                     )
                     
                     # Update the source dict so the 'Save' button picks it up
@@ -4908,7 +4909,7 @@ def reconstruct_dashboard_data_from_snapshot(details):
             SELECT trade_date, state, confirmed 
             FROM drawdown_state_history 
             WHERE asset_id = ? AND trade_date <= ?
-            ORDER BY trade_date DESC LIMIT 10
+            ORDER BY trade_date DESC LIMIT 30
         """, (symbol, s['as_of_date'])).fetchall()
         conn.close()
         for r in reversed(rows):
@@ -5145,7 +5146,7 @@ def render_history_dashboard(asset_id: str = None):
             disabled=["link_code", "symbol_name_show", "状态", "行情数据日期", "评估日期", "评估时间"],
             hide_index=True,
             use_container_width=True,
-            height=500,
+            height=1000,
             key="history_mgmt_editor_fixed"
         )
 
@@ -5473,7 +5474,7 @@ def main():
         # Deduplication and insertion at head
         if code in current: current.remove(code)
         current.insert(0, code)
-        st.session_state.recent_searches = current[:6]
+        st.session_state.recent_searches = current[:30]
     
     symbol_map = {row['asset_id']: row.get('symbol_name') for row in universe_df}
     
