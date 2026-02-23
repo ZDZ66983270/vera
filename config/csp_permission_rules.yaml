@@ -1,0 +1,39 @@
+# CSP 策略许可与合约筛选规则
+# 包含策略层面的准入逻辑 (U-State/O-State) 和 合约层面的审计标准
+
+# 1. 策略层准入配置
+csp_strategy_rules:
+  allowed_u_states: ["U5_REVERSAL", "U2_RANGE", "U4_STABILIZATION"]
+  allowed_o_states: ["O3_IV_CRUSH", "O2_PLATEAU"]
+  veto_u_states: ["U3_DISCOVERY"] # 强烈禁止
+  warning_o_states: ["O1_IV_EXPANSION"] # 降权
+
+# 2. 合约审计标准 (prefs)
+csp_contract_prefs:
+  # 期限标准 (交易日)
+  tenor_days:
+    preferred_min: 15
+    preferred_max: 90
+    hard_min: 7
+    hard_max: 120
+
+  # 风险标准 (Delta)
+  delta:
+    max: -0.10  # 绝对值上限 (0.10 - 0.35 为常见区间)
+    min: -0.35
+    target_abs: 0.20
+
+  # 安全垫标准 (基于现价的折价)
+  moneyness:
+    min_discount_pct: 0.05  # 必须 > 5% 折价
+    extreme_panic_discount: 0.15
+
+  # 收益标准
+  return_metrics:
+    min_annualized_return: 0.08  # 必须 > 8% 年化
+    target_annualized_return: 0.15
+
+  # 流动性标准
+  liquidity:
+    min_bid_price: 0.05
+    require_bid: true

@@ -68,9 +68,9 @@ def audit_single_contract(opt: Dict[str, Any], prefs: Optional[Dict[str, Any]] =
             'message': f"Delta={delta:.2f} 超出配置区间 [{d_min}, {d_max}]"
         })
 
-    # 4. Yield Check
-    yield_cfg = prefs.get('yield_rules', {})
-    min_yield = yield_cfg.get('min_annual_yield', 0.1)
+    # 4. Yield Check (Sync with YAML return_metrics)
+    yield_cfg = prefs.get('return_metrics', {})
+    min_yield = yield_cfg.get('min_annualized_return', 0.08)
     if annual_yield < min_yield:
         score -= 30
         reasons.append({

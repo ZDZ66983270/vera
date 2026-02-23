@@ -51,3 +51,18 @@ def load_csp_rules() -> Dict[str, Any]:
                 
     # 如果没找到，返回空字典或默认值，以免报错
     return {}
+def load_yaml_config(path: str) -> Dict[str, Any]:
+    """通用 YAML 加载器 (无缓存版本，供特定需求使用)"""
+    p = Path(path)
+    if not p.exists():
+        # 尝试相对 config 目录的路径
+        base_dir = Path(__file__).resolve().parent.parent
+        p_alt = base_dir / "config" / p.name
+        if p_alt.exists():
+            p = p_alt
+    
+    if not p.exists():
+        return {}
+        
+    with p.open("r", encoding="utf-8") as f:
+        return yaml.safe_load(f)

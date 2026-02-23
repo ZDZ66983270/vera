@@ -14,6 +14,7 @@ from analysis.trap_payout import detect_value_trap, calculate_payout_score
 from analysis.bank_quality import calc_bank_quality_score
 from analysis.conclusion import generate_conclusion, ConclusionInput
 from analysis.risk_matrix import build_risk_card
+from core.risk_narrative_engine import RiskNarrativeEngine  # NEW
 from analysis.dashboard import generate_dashboard_data, DashboardData
 from vera.explain.expert_audit_builder import ExpertAuditBuilder  # NEW
 from config import DEFAULT_LOOKBACK_YEARS
@@ -550,8 +551,49 @@ def run_snapshot(symbol: str, as_of_date=None, save_to_db: bool = False):
     except Exception as e:
         print(f"Error fetching behavior flags: {e}")
 
+    # --- 7.7 Generate Advanced Risk Narrative (Custom rules) ---
+    try:
+        # Calculate years of PE history for disclaimer
+        pe_years = len(set([str(d)[:4] for d in hist_dates])) if hist_dates else 0
+        qual_grade_map = {"STRONG": "HIGH", "MODERATE": "MEDIUM", "WEAK": "LOW"}
+        
+        narrative_engine = RiskNarrativeEngine()
+        recent_cycle_data = risk_metrics.get('risk_state', {}).get('recent_cycle', {})
+        
+        nar_metrics = {
+            'position_10y_pctile': float(risk_metrics.get('price_percentile', 0.5)) * 100,
+            'max_drawdown_10y_pct': float(risk_metrics.get('max_drawdown', 0.0)) * 100,
+            'max_drawdown_1y_pct': float(recent_cycle_data.get('max_dd_1y', 0.0)) * 100,
+            'days_to_max_dd_10y': int(risk_metrics.get('mdd_duration_days', 1)),
+            'days_to_max_dd_1y': int(recent_cycle_data.get('dd_days', 1)),
+            'pe_history_years': float(pe_years),
+            'valuation_bucket': getattr(fundamentals, 'valuation_bucket', 'NEUTRAL'),
+            'quality_grade': qual_grade_map.get(quality.quality_buffer_level, "MEDIUM")
+        }
+        
+        # Calculate ratio
+        mdd_10y = abs(nar_metrics['max_drawdown_10y_pct'])
+        mdd_1y = abs(nar_metrics['max_drawdown_1y_pct'])
+        nar_metrics['dd_1y_vs_10y_ratio'] = mdd_1y / mdd_10y if mdd_10y > 0 else 0.0
+        
+        structured_narrative = narrative_engine.generate_narrative(nar_metrics)
+        
+        # Assemble final HTML string for UI
+        final_narrative_html = ""
+        # Follow output_layout sections order: LONG, SHORT, DISCLAIMER
+        for sec_key in ["LONG_CYCLE_SECTION", "SHORT_WINDOW_SECTION", "DISCLAIMER_SECTION"]:
+            if sec_key in structured_narrative:
+                sec = structured_narrative[sec_key]
+                if sec.get('content_zh'):
+                    # Use a clean layout for the narrative block
+                    final_narrative_html += f"<div style='margin-bottom:10px;'><b style='color:#94a3b8;'>{sec['title_zh']}:</b> {sec['content_zh']}</div>"
+        
+        if final_narrative_html:
+            # Inject into the existing narrative field used by app.py
+            if 'recent_cycle' in risk_metrics['risk_state'] and risk_metrics['risk_state']['recent_cycle']:
+                risk_metrics['risk_state']['recent_cycle']['risk_narrative'] = final_narrative_html
     except Exception as e:
-        print(f"Error fetching behavior flags: {e}")
+        print(f"Warning: Advanced Risk Narrative generation failed: {e}")
 
     # --- 7.4 Unified Standardized Risk Structures ---
     # Individual Asset Risk
@@ -804,10 +846,33 @@ def run_snapshot(symbol: str, as_of_date=None, save_to_db: bool = False):
             dashboard_data.behavior_suggestion = behavior_res.action_label_zh
             dashboard_data.cognitive_warning = behavior_res.note_zh
             
+            # Suggestion 4: Refined layered conclusion (Layered progressively)
+            # 1. Market Env
+            market_env = risk_metrics.get('risk_state', {}).get('desc', '环境待确认')
+            # 2. Valuation & Quality
+            val_status = fundamentals.valuation_status
+            val_pct_str = f"{pe_percentile:.1%}" if pe_percentile is not None else "N/A"
+            qual_status = qual_level
+            # 3. Contract Audit (Optional but requested)
+            from vera.engines.csp_contract_engine import get_csp_candidates, pick_best_csp_contract
+            current_price = prices["close"].iloc[-1]
+            candidates = get_csp_candidates("vera.db", asset.asset_id, current_price)
+            _, all_audited = pick_best_csp_contract(candidates)
+            has_approved_csp = any(c['_audit'].status == "APPROVED" for c in all_audited) if all_audited else False
+            
+            csp_note = ""
+            if behavior_res.action_code not in ["NO_NEW_POSITION", "CAPITAL_PRESERVATION"]:
+                csp_note = "期权合约审计通过，" if has_approved_csp else "期权合约不匹配，"
+            
+            # Assembly
+            layered_summary = f"市场{market_env}，估值{val_status}(分位 {val_pct_str})且质量{qual_status}。{csp_note}行为模块全局建议为「{behavior_res.action_label_zh}」。"
+            dashboard_data.overall_conclusion = layered_summary
+
             # Inject action code into overlay for debugging/verification
             if dashboard_data.overlay is None: dashboard_data.overlay = {}
             dashboard_data.overlay['behavior_action_code'] = behavior_res.action_code
             dashboard_data.overlay['behavior_action_label_zh'] = behavior_res.action_label_zh
+            dashboard_data.overlay['has_approved_csp'] = has_approved_csp
             
             print(f"[{symbol}] Behavior Rule Triggered: {behavior_res.triggered_rule_name} -> {behavior_res.action_code}")
             
@@ -950,7 +1015,14 @@ def save_full_snapshot(snapshot_id, symbol, as_of_date, risk_metrics,
             VALUES (?, ?, ?)
         """, (snapshot_id, "eps_ttm", safe_val(fundamentals.eps_ttm)))
 
-        # 5. Current Price (Critical for Snapshot View)
+        # 5. PE Percentile (Historical Ranking)
+        if pe_percentile is not None:
+             cursor.execute("""
+                INSERT INTO metric_details (snapshot_id, metric_key, value)
+                VALUES (?, ?, ?)
+            """, (snapshot_id, "pe_percentile", safe_val(pe_percentile)))
+
+        # 6. Current Price
         if current_price is not None:
              cursor.execute("""
                 INSERT INTO metric_details (snapshot_id, metric_key, value)

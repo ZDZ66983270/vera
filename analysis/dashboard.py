@@ -227,6 +227,7 @@ def generate_dashboard_data(
             # Legacy fields for safety
             "state": risk_state_node.get("state"),
             "has_new_high": risk_state_node.get("has_new_high", False),
+            "recent_cycle": risk_state_node.get("recent_cycle"),
         }
     
     path_risk_level = path_card_data.get("path_risk_level", "MID")

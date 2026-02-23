@@ -400,12 +400,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def render_vera_top_decision_area(result):
+def render_vera_top_decision_area(result, dashboard_data=None):
     """
     Renders the VERA Top Decision Area with a 3-row structured layout:
     Row 1: Verdict + Facts
     Row 2: Regime + Unlock Conditions
     Row 3: Action Gate (Permitted Actions)
+    
+    Coordinate with Behavior & Cognition (POSTURE) and CSP Audit.
     """
     if not result or "error" in result:
          st.warning(f"VERA Engine: {result.get('error', 'Unknown Error')}")
@@ -421,6 +423,26 @@ def render_vera_top_decision_area(result):
     u_state = u.get("U_state", "UNKNOWN")
     o_state = o.get("O_state", "UNKNOWN")
     
+    # 0. Behavior & CSP Coordination (NEW)
+    posture_code = "WATCH"
+    posture_label = "观望为主"
+    if dashboard_data and hasattr(dashboard_data, 'overlay'):
+        posture_code = dashboard_data.overlay.get('behavior_action_code', "WATCH")
+        posture_label = dashboard_data.behavior_suggestion or "观望为主"
+
+    # Restrictive Postures (HOLD, REDUCE, EXIT equivalents)
+    is_restrictive = posture_code in ["HOLD_OR_LIGHTEN", "WATCH", "CAPITAL_PRESERVATION", "NO_NEW_POSITION", "LIMITED_CSP_DEEP_OTM"]
+    is_aggressive = posture_code in ["SCALE_IN_LEFT", "SCALE_IN_RIGHT"]
+
+    # CSP Audit Coordination
+    has_approved_csp = False
+    if dashboard_data:
+        from vera.engines.csp_contract_engine import get_csp_candidates, pick_best_csp_contract
+        current_price = getattr(dashboard_data, 'price', 0.0)
+        candidates = get_csp_candidates("vera.db", dashboard_data.symbol, current_price)
+        _, all_audited = pick_best_csp_contract(candidates)
+        has_approved_csp = any(c['_audit'].status == "APPROVED" for c in all_audited) if all_audited else False
+
     # Metrics for Facts
     iv_pct = o.get("iv_now_pct", 0.0)
     m = u.get("metrics", {})
@@ -465,11 +487,27 @@ def render_vera_top_decision_area(result):
                 tag_list_html += f'<span style="background:{color}22; color:{color}; border:1px solid {color}44; padding:2px 10px; border-radius:100px; font-size:0.75rem; font-weight:600; margin-right:8px; margin-top:8px;">{label}</span>'
             tag_html = f'<div style="display:flex; flex-wrap:wrap; margin-top:16px; border-top:1px solid rgba(255,255,255,0.05); padding-top:12px;">{tag_list_html}</div>'
 
+        # Override Summary based on Posture (Suggestion 1)
+        summary_label = d.get('summary_label_zh', '无法裁定')
+        summary_note = d.get('summary_note_zh', '正在获取系统提示...')
+        
+        if is_restrictive:
+            # If posture says Hold/Watch but VERA is Green (Aggressive), we force a more conservative header
+            if r_state == "GREEN":
+                summary_label = "持有为主"
+                summary_note = f"环境友好但估值或性价比受限，建议以持有和观察为主 (行为指南：{posture_label})。"
+            else:
+                summary_label = posture_label
+                summary_note = f"当前环境处于 {u_label}，{summary_note}"
+        elif is_aggressive and r_state == "GREEN":
+            summary_label = "参与交易 / 建仓窗口"
+            summary_note = "反转确认且性价比回归，进入多维度共振的积极参与窗口。"
+
         st.markdown(f"""
         <div style="background:{bg_color}; border:1px solid {border_color}; border-radius:12px; padding:24px; min-height:160px; display:flex; flex-direction:column; justify-content:center;">
             <div style="font-size:0.75rem; color:{text_color}; text-transform:uppercase; font-weight:700; margin-bottom:8px;">最终结论 (Final Verdict)</div>
-            <div style="font-size:1.75rem; font-weight:800; color:{text_color}; margin-bottom:8px;">{d.get('summary_label_zh', '无法裁定')}</div>
-            <div style="font-size:0.95rem; color:#94a3b8; line-height:1.5;">{d.get('summary_note_zh', '正在获取系统提示...')}</div>
+            <div style="font-size:1.75rem; font-weight:800; color:{text_color}; margin-bottom:8px;">{summary_label}</div>
+            <div style="font-size:0.95rem; color:#94a3b8; line-height:1.5;">{summary_note}</div>
             {tag_html}
         </div>
         """, unsafe_allow_html=True)
@@ -578,6 +616,38 @@ def render_vera_top_decision_area(result):
         is_allowed = actions.get(key, False)
         reason = reasons.get(key, "禁止")
         
+        # --- Coordination Logic (Suggestion 2 & 3) ---
+        if key == "sell_put_csp":
+            if not has_approved_csp:
+                # Override specifically if no contracts passed audit (Suggestion 2)
+                status_text = "当前无合格合约"
+                color_theme = "#f59e0b"
+                bg = "rgba(245, 158, 11, 0.12)"
+                sym = "history_edu"
+                box_glow = "none"
+                col.markdown(f"""
+                <div style="background:{bg}; border-left:4px solid {color_theme}; border-radius:10px; padding:18px 16px; display:flex; align-items:center; justify-content:space-between; box-shadow:{box_glow}; min-height:80px;">
+                    <div style="display:flex; align-items:center; gap:12px;">
+                        <span class="material-symbols-outlined" style="font-size:22px; color:{color_theme}; opacity:0.8;">{sym}</span>
+                        <span style="font-size:1.05rem; font-weight:700; color:#cbd5e1;">{label}</span>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-size:1.15rem; font-weight:900; color:{color_theme}; letter-spacing:0.5px; text-transform:uppercase;">{status_text}</div>
+                        <div style="font-size:0.65rem; color:#64748b; margin-top:2px; font-weight:600; opacity:0.6;">CONTRACT AUDIT REJECTED</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                return
+
+        # Restrictive Posture Tone Override (Suggestion 3)
+        if is_restrictive and is_allowed:
+            if key == "buy_underlying":
+                reason = "逢低参与" # Instead of "右侧参与"
+            elif key == "sell_put_csp":
+                reason = "可择机参与" # Instead of "高胜率"
+            elif key == "roll_put":
+                reason = "可降本" # Allow reduction of existing position cost
+        
         # V2 状态逻辑划分
         if is_allowed:
             # 1. 🟢 可操作 (Actionable)
@@ -618,7 +688,7 @@ def render_vera_top_decision_area(result):
     _render_action_btn(a2, "sell_put_csp", "卖出 Put (CSP)")
     _render_action_btn(a3, "roll_put", "期权滚动 (Roll)")
 
-    st.markdown('<div style="font-size:0.7rem; color:#475569; margin-top:12px; text-align:right;">行为权限由 PermissionEngine 输出，前端不二次判断。</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-size:0.7rem; color:#475569; margin-top:12px; text-align:right;">行为权限由 PermissionEngine & BehaviorEngine 联动输出。</div>', unsafe_allow_html=True)
 
 
 # Custom CSS for "Premium" feel
@@ -659,15 +729,17 @@ st.markdown("""
     
     /* 3. Verdict Box (Footer) */
     .vera-verdict{
-        border: 1px solid rgba(255, 75, 75, 0.35);
+        border: 1px solid rgba(148, 163, 184, 0.2);
         border-radius: 12px;
-        padding: 16px 18px;
-        background: rgba(255,75,75,0.06);
-        color: #fca5a5;
-        font-size: 1.1rem;
-        font-weight: 600;
+        padding: 20px 24px;
+        background: linear-gradient(90deg, rgba(148, 163, 184, 0.08) 0%, rgba(30, 41, 59, 0.4) 100%);
+        color: #e2e8f0;
+        font-size: 1.05rem;
+        font-weight: 500;
         text-align: left;
         margin-top: 10px;
+        line-height: 1.6;
+        box-shadow: inset 0 0 20px rgba(255,255,255,0.02);
     }
 
     /* 4. Risk Overlay Styles (Enhanced for V2.0) */
@@ -1887,13 +1959,32 @@ def render_csp_eval_card(data: DashboardData, vera_result: dict = None, expert_m
 合约参数：DTE {best_contract['dte']}天, 年化 {ay:.1%}, Delta {best_contract['delta']}
 建议：{audit.suggestion}"""
     
+    # Part of Suggestion 2: Card Title logic
+    card_title = "4. 高胜率 CSP 方案"
+    card_subtitle = "方案基于当前期权链最优合约评估"
+    card_subtitle_color = "#94a3b8"
+
+    if contract_status == "REJECTED":
+        card_title = "4. 卖出 Put (CSP)"
+        card_subtitle = "当前无合格合约"
+        card_subtitle_color = "#64748b" # More neutral/gray
+    elif contract_status == "NO_DATA":
+        card_title = "4. 卖出 Put (CSP)"
+        card_subtitle = "数据源未就绪"
+    elif r_state == "RED":
+        card_title = "4. 卖出 Put (CSP)"
+        card_subtitle = "策略暂不建议参与"
+
     # 5. Render with Three-Column Horizontal Layout
     st.markdown(f"""
 <div class="vera-card">
-<div class="vera-card-header">
-<span class="material-symbols-outlined" style="margin-right:10px;">assignment_turned_in</span>
-<span style="font-weight:700; color:#e2e8f0; font-size:0.9rem;">CSP 策略评估 (CSP Strategy Evaluation)</span>
-<span class="vera-help-icon" style="font-size:0.85rem; opacity:0.7; margin-left:8px; cursor:help;" title="策略层：判断当前资产环境是否适合 CSP；合约层：审计具体 Put 合约参数。">ⓘ</span>
+<div class="vera-card-header" style="justify-content: space-between; display: flex; align-items: center;">
+    <div style="display:flex; align-items:center;">
+        <span class="material-symbols-outlined" style="margin-right:10px;">assignment_turned_in</span>
+        <span style="font-weight:700; color:#e2e8f0; font-size:1rem;">{card_title}</span>
+        <span class="vera-help-icon" style="font-size:0.85rem; opacity:0.7; margin-left:8px; cursor:help;" title="策略层：判断当前资产环境是否适合 CSP；合约层：审计具体 Put 合约参数。">ⓘ</span>
+    </div>
+    <div style="font-size:0.75rem; color:{card_subtitle_color}; font-weight:500;">{card_subtitle}</div>
 </div>
 <div class="vera-card-body" style="display:block; padding:20px;">
 
@@ -2821,8 +2912,13 @@ def render_valuation_card(data: DashboardData, chart_start_date=None, chart_end_
     else:
         s_color, s_text = "#F57C00", "合理"
 
-    html_status = _get_metric_html_string("估值状态 (Valuation Status)", 
+    score_val = v.get('pe_percentile')
+    score_str = f"{score_val*100:.1f}%" if score_val is not None else "N/A"
+    
+    label_with_10y = '估值状态 (Valuation Status) <span style="font-size:0.65rem; background:#334155; color:#94a3b8; padding:1px 5px; border-radius:4px; margin-left:6px; font-weight:600; vertical-align:middle; border:1px solid #475569;">10Y</span>'
+    html_status = _get_metric_html_string(label_with_10y, 
                                           f'<span style="color:{s_color}; font-weight:700;">{s_text}</span>',
+                                          details=f"当前水位：{score_str}",
                                           help_text=f"估值水位：反映当前估值相对于过去 10 年历史区间的热度。分位值越高表示当前估值越贵。判定标准：<br>• 0-15%：低估/深度区域<br>• 15-35%：合理偏低区域<br>• 35-75%：合理稳定区域<br>• 75-90%：明显高估区域<br>• 90-100%：严重高估区域。")
 
     # Quality Check
@@ -3185,7 +3281,7 @@ def render_page(data: DashboardData, profile: Optional[RiskProfile] = None, char
              # Use session_state to ensure we get the user-selected date correctly across scopes
              vera_result = get_vera_verdict(data.symbol, anchor_date=st.session_state.get("eval_date"))
         
-        render_vera_top_decision_area(vera_result)
+        render_vera_top_decision_area(vera_result, dashboard_data=data)
         
     except Exception as e:
         st.error(f"VERA Engine Error: {e}")
@@ -3199,12 +3295,9 @@ def render_page(data: DashboardData, profile: Optional[RiskProfile] = None, char
     # B.1 Unified Supplementary Card
     render_supplementary_card(data, profile, vera_result)
     
-    # B.2 Row 2: VERA Verdict (Full Width) -> Removed as replaced by VERA above
-    # B.2 Row 2: VERA Verdict (Three Column Layout)
-    # st.markdown("<div style='margin-top: 20px;'></div>", unsafe_allow_html=True)
-    # vc1, vc2, vc3 = st.columns(3)
-    # with vc1:
-    #    render_verdict(data)
+    # B.2 Row 2: VERA Verdict (Full Width)
+    st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+    render_verdict(data)
     
     
     
@@ -4816,7 +4909,8 @@ def reconstruct_dashboard_data_from_snapshot(details):
         'valuation_status': val_status,
         'valuation_status_key': val_key,
         'anchor_metric': s.get('valuation_anchor', 'PE'),
-        'pe_percentile': metrics.get('pe_percentile') or risk_card.get('pe_percentile')
+        'pe_percentile': metrics.get('pe_percentile') or risk_card.get('pe_percentile'),
+        'valuation_status_label_zh': s.get('valuation_status_label_zh') or val_status
     }
     # If valuation status details were stored in metrics or specific table, map them here.
     # For now, simplistic mapping.
