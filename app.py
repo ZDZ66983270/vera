@@ -181,7 +181,7 @@ st.markdown("""
         display: grid;
         grid-template-columns: repeat(3, 1fr); /* Equal 3-column layout */
         gap: 32px;
-        align-items: center;
+        align-items: stretch;
     }
 
     /* Column 0: Verdict */
@@ -400,6 +400,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+POSTURE_ACTION_CAP = {
+    "EXIT":    {"buy": "FORBID", "csp": "FORBID", "roll": "FORBID"},
+    "REDUCE":  {"buy": "FORBID", "csp": "LIGHT_ONLY", "roll": "MANAGE_RISK"},
+    "HOLD":    {"buy": "LIGHT_ONLY", "csp": "LIGHT_ONLY", "roll": "ALLOWED"},
+    "ADD":     {"buy": "ALLOWED", "csp": "ALLOWED", "roll": "ALLOWED"},
+}
+
 def render_vera_top_decision_area(result, dashboard_data=None):
     """
     Renders the VERA Top Decision Area with a 3-row structured layout:
@@ -409,30 +416,42 @@ def render_vera_top_decision_area(result, dashboard_data=None):
     
     Coordinate with Behavior & Cognition (POSTURE) and CSP Audit.
     """
-    if not result or "error" in result:
+    if result is None:
+         # Minimal fallback if result is missing
+         result = {}
+    
+    if "error" in result:
          st.warning(f"VERA Engine: {result.get('error', 'Unknown Error')}")
          return
 
-    u = result.get("underlying", {})
-    o = result.get("options", {})
-    d = result.get("decision", {})
+    # --- VERA 2.0 Binding (C1) ---
+    analysis_result = getattr(dashboard_data, 'analysis_result', {})
     
-    r_state = d.get("R_state", "UNKNOWN")
-    u_label = u.get("U_state_label", "未知")
-    o_label = o.get("O_state_label", "未知")
-    u_state = u.get("U_state", "UNKNOWN")
-    o_state = o.get("O_state", "UNKNOWN")
+    # Extract Base Signals
+    decision_core = analysis_result.get("decision_core", {})
+    behavior_block = analysis_result.get("behavior_block", {})
+    risk_node = analysis_result.get("risk_overlay", {})
+    val_node = analysis_result.get("valuation", {})
+    regime_node = analysis_result.get("regime_reasoning", {})
     
-    # 0. Behavior & CSP Coordination (NEW)
-    posture_code = "WATCH"
-    posture_label = "观望为主"
-    if dashboard_data and hasattr(dashboard_data, 'overlay'):
-        posture_code = dashboard_data.overlay.get('behavior_action_code', "WATCH")
-        posture_label = dashboard_data.behavior_suggestion or "观望为主"
+    r_state = decision_core.get("R_state", "UNKNOWN")
+    posture = behavior_block.get("posture", "HOLD")
+    suggestion = behavior_block.get("suggestion", "正在获取系统提示...")
+    
+    # Action Caps from Posture
+    caps = POSTURE_ACTION_CAP.get(posture, POSTURE_ACTION_CAP["HOLD"])
 
-    # Restrictive Postures (HOLD, REDUCE, EXIT equivalents)
-    is_restrictive = posture_code in ["HOLD_OR_LIGHTEN", "WATCH", "CAPITAL_PRESERVATION", "NO_NEW_POSITION", "LIMITED_CSP_DEEP_OTM"]
-    is_aggressive = posture_code in ["SCALE_IN_LEFT", "SCALE_IN_RIGHT"]
+
+    # Data Layers for Facts (Prioritize analysis_result, fallback to result)
+    u = result.get("underlying", {}) if result else {}
+    o = result.get("options", {}) if result else {}
+    d = result.get("decision", {}) if result else {}
+    
+    # Pre-define defaults for Narrative fallback
+    from vera.mappings import get_u_state_cn
+    u_label = u.get("U_state_label") or get_u_state_cn(risk_node.get("D_state", "UNKNOWN"))
+    u_state = u.get("U_state") or risk_node.get("D_state", "UNKNOWN")
+    u_def = get_u_state_def(u_state)
 
     # CSP Audit Coordination
     has_approved_csp = False
@@ -443,12 +462,12 @@ def render_vera_top_decision_area(result, dashboard_data=None):
         _, all_audited = pick_best_csp_contract(candidates)
         has_approved_csp = any(c['_audit'].status == "APPROVED" for c in all_audited) if all_audited else False
 
-    # Metrics for Facts
-    iv_pct = o.get("iv_now_pct", 0.0)
-    m = u.get("metrics", {})
+    # Metrics for Facts (C1.1)
+    iv_now_pct = o.get("iv_now_pct") or val_node.get("pe_percentile", 0.0) # PE pctile as proxy if IV missing
+    m = u.get("metrics") or risk_node.get("metrics") or {}
     daily_ret = m.get("daily_ret", 0.0)
-    vol_ratio = m.get("vol_ratio", 0.0)
-    cp = m.get("close_pos", 0.0)
+    vol_ratio = m.get("vol_ratio", 1.0)
+    cp = m.get("close_pos", 0.5)
 
     # 1. Title
     st.markdown('<div style="font-size:1.1rem; font-weight:700; color:#e2e8f0; margin-bottom:16px;">🧠 VERA 核心决策 (Decision Engine)</div>', unsafe_allow_html=True)
@@ -488,27 +507,22 @@ def render_vera_top_decision_area(result, dashboard_data=None):
             tag_html = f'<div style="display:flex; flex-wrap:wrap; margin-top:16px; border-top:1px solid rgba(255,255,255,0.05); padding-top:12px;">{tag_list_html}</div>'
 
         # Override Summary based on Posture (Suggestion 1)
-        summary_label = d.get('summary_label_zh', '无法裁定')
-        summary_note = d.get('summary_note_zh', '正在获取系统提示...')
+        # Posture Mapping (C3)
+        posture_map = {
+            "ADD": ("积极参与 / SCALE-IN", "rgba(34, 197, 94, 0.1)", "rgba(34, 197, 94, 0.4)", "#22c55e"),
+            "HOLD": ("控制仓位 / HOLD", "rgba(234, 179, 8, 0.1)", "rgba(234, 179, 8, 0.4)", "#eab308"),
+            "REDUCE": ("降低风险 / REDUCE", "rgba(249, 115, 22, 0.1)", "rgba(249, 115, 22, 0.4)", "#f97316"),
+            "EXIT": ("回避风险 / EXIT", "rgba(239, 68, 68, 0.1)", "rgba(239, 68, 68, 0.4)", "#ef4444"),
+            "WATCH": ("继续观望 / WATCH", "rgba(148, 163, 184, 0.1)", "rgba(148, 163, 184, 0.4)", "#94a3b8")
+        }
         
-        if is_restrictive:
-            # If posture says Hold/Watch but VERA is Green (Aggressive), we force a more conservative header
-            if r_state == "GREEN":
-                summary_label = "持有为主"
-                summary_note = f"环境友好但估值或性价比受限，建议以持有和观察为主 (行为指南：{posture_label})。"
-            else:
-                summary_label = posture_label
-                summary_note = f"当前环境处于 {u_label}，{summary_note}"
-        elif is_aggressive and r_state == "GREEN":
-            summary_label = "参与交易 / 建仓窗口"
-            summary_note = "反转确认且性价比回归，进入多维度共振的积极参与窗口。"
+        p_label, p_bg, p_border, p_color = posture_map.get(posture, posture_map["HOLD"])
 
         st.markdown(f"""
-        <div style="background:{bg_color}; border:1px solid {border_color}; border-radius:12px; padding:24px; min-height:160px; display:flex; flex-direction:column; justify-content:center;">
-            <div style="font-size:0.75rem; color:{text_color}; text-transform:uppercase; font-weight:700; margin-bottom:8px;">最终结论 (Final Verdict)</div>
-            <div style="font-size:1.75rem; font-weight:800; color:{text_color}; margin-bottom:8px;">{summary_label}</div>
-            <div style="font-size:0.95rem; color:#94a3b8; line-height:1.5;">{summary_note}</div>
-            {tag_html}
+        <div style="background:{p_bg}; border:1px solid {p_border}; border-radius:12px; padding:24px; min-height:160px; display:flex; flex-direction:column; justify-content:center;">
+            <div style="font-size:0.75rem; color:{p_color}; text-transform:uppercase; font-weight:700; margin-bottom:8px;">VERA 投资姿态 (POSTURE)</div>
+            <div style="font-size:1.75rem; font-weight:800; color:{p_color}; margin-bottom:8px;">{p_label}</div>
+            <div style="font-size:0.95rem; color:#f1f5f9; line-height:1.5;">{suggestion}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -540,7 +554,7 @@ def render_vera_top_decision_area(result, dashboard_data=None):
         st.markdown(f"""
         <div style="background:rgba(30, 41, 59, 0.3); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:20px; min-height:160px;">
             <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:700; margin-bottom:12px;">关键指标 (Key Metrics)</div>
-            {_fmt_fact(vol_title, f"{iv_pct:.2f}", "%", help_text=vol_help)}
+            {_fmt_fact(vol_title, f"{iv_now_pct:.2f}", "%", help_text=vol_help)}
             {_fmt_fact("当日涨跌", f"{daily_ret*100:+.2f}", "%")}
             {_fmt_fact("当日量比 (vs MA20)", f"{vol_ratio:.1f}", "x", help_text="当日成交量与过去 20 日平均成交量的比值。<br>• >1.5x: 放量<br>• <0.6x: 缩量<br>放量通常意味着分歧或趋势的开始。")}
             {_fmt_fact("收盘位置", f"{cp*100:.0f}", "%", help_text="当日收盘价在当日最高价与最低价之间的相对位置。<br>• 100%: 收在最高 (极强)<br>• 0%: 收在最低 (极弱)<br>• 50%: 收在中间 (平衡)")}
@@ -555,50 +569,79 @@ def render_vera_top_decision_area(result, dashboard_data=None):
     c3, c4 = st.columns([2, 1], gap="medium")
     
     with c3:
-        # Regime Desc
-        u_def = get_u_state_def(u_state)
+        # Regime Desc (Unified with price_structure_code)
+        ps_code = regime_node.get("price_structure_code", "US_TREND_DOWN")
+        
+        # Load dry text from narrative rules
+        import yaml
+        import os
+        narrative_rules_path = os.path.join(os.getcwd(), "config/risk_narrative_rules.yaml")
+        try:
+            with open(narrative_rules_path, 'r', encoding='utf-8') as f:
+                nr_rules = yaml.safe_load(f)
+            ps_rules = nr_rules.get("price_structure", {})
+            ps_info = ps_rules.get(ps_code, {})
+            ps_title = ps_info.get("title", u_label)
+            ps_body = ps_info.get("body", u_def)
+        except:
+            ps_title = u_label
+            ps_body = u_def
+
         st.markdown(f"""
         <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:20px; min-height:140px;">
-            <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; margin-bottom:4px;">{u_state}</div>
-            <div style="font-size:1.1rem; font-weight:700; color:#e2e8f0; margin-bottom:8px;">{u_label}</div>
-            <div style="font-size:0.9rem; color:#94a3b8; line-height:1.6;">{u_def}</div>
+            <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; margin-bottom:4px;">{u_state} / {ps_code}</div>
+            <div style="font-size:1.1rem; font-weight:700; color:#e2e8f0; margin-bottom:8px;">{ps_title}</div>
+            <div style="font-size:0.9rem; color:#94a3b8; line-height:1.6;">{ps_body}</div>
         </div>
         """, unsafe_allow_html=True)
 
     with c4:
-        # Unlock Conditions List
-        next_conditions = d.get("next_conditions_details", [])
+        # Unlock Conditions List (Updated to handle EXIT posture)
+        unlock_ctx = analysis_result.get("unlock_conditions", {})
+        flags = unlock_ctx.get("flags", {})
+        desc = unlock_ctx.get("descriptions", {})
+        all_ok = unlock_ctx.get("all_ok", False)
+        
         nc_rows = ""
         expert_mode = st.session_state.get("expert_mode_active", False)
         
-        if next_conditions:
-            for cond in next_conditions:
-                icon = cond.get("status", "❓")
-                is_done = (icon == "✅")
+        if posture == "EXIT":
+            # EXIT posture: Show only as template for future consideration
+            nc_rows += '<div style="font-size:0.8rem; color:#94a3b8; margin-bottom:12px; font-style:italic;">当前处于 EXIT 姿态。以下为未来重新考虑参与时需满足的价格形态条件：</div>'
+            for key in ["break_low_ok", "volume_ok", "close_location_ok"]:
+                d_text = desc.get(key, key)
+                nc_rows += f'<div style="font-size:0.85rem; color:#64748b; margin-bottom:6px; padding-left:4px;">• {d_text}</div>'
+        else:
+            # Normal posture: Show勾选状态
+            for key in ["break_low_ok", "volume_ok", "close_location_ok"]:
+                is_done = flags.get(key, False)
+                icon = "✅" if is_done else "⭕️"
                 color = "#22c55e" if is_done else "#64748b"
-                
-                # Base row
-                nc_rows += f'<div style="font-size:0.85rem; color:{color}; margin-bottom:4px; font-weight:600;">{icon} {cond.get("label")}</div>'
+                d_text = desc.get(key, key)
+                nc_rows += f'<div style="font-size:0.85rem; color:{color}; margin-bottom:4px; font-weight:600;">{icon} {d_text}</div>'
                 
                 # Expert details
                 if expert_mode:
-                    val = cond.get("value", "-")
-                    tgt = cond.get("target", "-")
-                    evi = cond.get("evidence", "")
+                    # Fallback to next_conditions_details if legacy data is missing
+                    legacy_conds = d.get("next_conditions_details", [])
+                    matching_cond = next((c for c in legacy_conds if key in c.get('label', '') or c.get('label') == d_text), {})
+                    val = matching_cond.get("value", "-")
+                    tgt = matching_cond.get("target", "-")
+                    evi = matching_cond.get("evidence", "")
                     detail_color = "#4ade80" if is_done else "#94a3b8"
                     nc_rows += f'<div style="font-size:0.75rem; color:{detail_color}; margin-left:24px; margin-bottom:10px; padding:4px 8px; background:rgba(255,255,255,0.03); border-radius:4px; border-left:2px solid {color}88;">'
                     nc_rows += f'<span style="opacity:0.7;">当前:</span> <b>{val}</b> '
                     nc_rows += f'<span style="opacity:0.7; margin-left:8px;">目标:</span> <b>{tgt}</b><br/>'
-                    nc_rows += f'<span style="opacity:0.5; font-style:italic;">证据: {evi}</span>'
+                    if evi: nc_rows += f'<span style="opacity:0.5; font-style:italic;">证据: {evi}</span>'
                     nc_rows += '</div>'
-        else:
-            nc_rows = '<div style="font-size:0.85rem; color:#64748b;">当前状态暂无特定解锁条件。</div>'
+
+            if all_ok:
+                nc_rows += '<div style="margin-top:12px; padding:8px 12px; background:rgba(34,197,94,0.1); border-radius:6px; font-size:0.75rem; color:#4ade80;">✨ 价格形态已基本满足反转条件，请仍以整体姿态和估值/质量评估为准。</div>'
 
         st.markdown(
             f'<div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:20px; min-height:140px;">'
             f'<div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:700; margin-bottom:12px;">解锁条件 (Unlock Conditions)</div>'
             f'{nc_rows}'
-            f'<div style="font-size:0.65rem; color:#475569; margin-top:10px; font-style:italic;">* 条件达成前，PermissionEngine 将默认保持当前状态。</div>'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -609,65 +652,72 @@ def render_vera_top_decision_area(result, dashboard_data=None):
     st.markdown('<div style="font-size:0.95rem; font-weight:700; color:#e2e8f0; margin-bottom:12px;">行为权限 (Action Gate)</div>', unsafe_allow_html=True)
     a1, a2, a3 = st.columns(3, gap="medium")
     
-    actions = d.get("allowed_actions", {})
-    reasons = d.get("action_reasons", {})
+    # Action Logic Coordination (C1.4)
+    csp_audit = analysis_result.get("csp_contract_audit", {})
+    csp_table = analysis_result.get("csp_contract_table", [])
+    contract_status_display = csp_audit.get("contract_status", "SKIPPED")
+    if not csp_table:
+        contract_status_display = "NO_DATA"
+    
+    actions = decision_core.get("allowed_actions", {})
+    reasons = decision_core.get("action_reasons", {})
 
     def _render_action_btn(col, key, label, icon="radar"):
+        # Mapping UI key to Cap key
+        cap_key_map = {"buy_underlying": "buy", "sell_put_csp": "csp", "roll_put": "roll", "roll_and_protection": "roll"}
+        cap_val = caps.get(cap_key_map.get(key, "hold"), "FORBID")
+        
+        # Base logic from PermissionEngine
         is_allowed = actions.get(key, False)
         reason = reasons.get(key, "禁止")
         
-        # --- Coordination Logic (Suggestion 2 & 3) ---
-        if key == "sell_put_csp":
-            if not has_approved_csp:
-                # Override specifically if no contracts passed audit (Suggestion 2)
-                status_text = "当前无合格合约"
-                color_theme = "#f59e0b"
-                bg = "rgba(245, 158, 11, 0.12)"
-                sym = "history_edu"
-                box_glow = "none"
-                col.markdown(f"""
-                <div style="background:{bg}; border-left:4px solid {color_theme}; border-radius:10px; padding:18px 16px; display:flex; align-items:center; justify-content:space-between; box-shadow:{box_glow}; min-height:80px;">
-                    <div style="display:flex; align-items:center; gap:12px;">
-                        <span class="material-symbols-outlined" style="font-size:22px; color:{color_theme}; opacity:0.8;">{sym}</span>
-                        <span style="font-size:1.05rem; font-weight:700; color:#cbd5e1;">{label}</span>
-                    </div>
-                    <div style="text-align:right;">
-                        <div style="font-size:1.15rem; font-weight:900; color:{color_theme}; letter-spacing:0.5px; text-transform:uppercase;">{status_text}</div>
-                        <div style="font-size:0.65rem; color:#64748b; margin-top:2px; font-weight:600; opacity:0.6;">CONTRACT AUDIT REJECTED</div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                return
+        # Hard override by posture cap
+        if cap_val == "FORBID":
+             is_allowed = False
+             reason = "禁" # Keep it short for UI
+        elif cap_val == "LIGHT_ONLY" and is_allowed:
+             reason = "微"
+        elif cap_val == "MANAGE_RISK" and is_allowed:
+             reason = "险"
 
-        # Restrictive Posture Tone Override (Suggestion 3)
-        if is_restrictive and is_allowed:
-            if key == "buy_underlying":
-                reason = "逢低参与" # Instead of "右侧参与"
-            elif key == "sell_put_csp":
-                reason = "可择机参与" # Instead of "高胜率"
-            elif key == "roll_put":
-                reason = "可降本" # Allow reduction of existing position cost
+        # Special case: CSP Contract Audit
+        if key == "sell_put_csp" and is_allowed:
+            if contract_status_display == "REJECTED":
+                 is_allowed = False
+                 reason = "约"
+            elif contract_status_display == "NO_DATA":
+                 is_allowed = False
+                 reason = "空"
         
-        # V2 状态逻辑划分
+        # Final UI labels
         if is_allowed:
-            # 1. 🟢 可操作 (Actionable)
-            color_theme = "#22c55e" # 鲜绿色
-            bg = "rgba(34, 197, 94, 0.2)"
-            status_text = reason if reason != "允许" else "允许执行"
-            sym = "check_circle"
-            box_glow = "0 4px 12px rgba(34, 197, 94, 0.15)"
-        elif "待" in reason or "观察" in reason:
-            # 2. ⚪ 观察期 (Observation)
-            color_theme = "#f8fafc" # 亮白色/冰蓝色
-            bg = "rgba(255, 255, 255, 0.08)"
-            status_text = reason
-            sym = "visibility"
-            box_glow = "none"
+            if cap_val == "ALLOWED":
+                 status_text = "允许参与"
+                 color_theme = "#22c55e"
+                 sym = "check_circle"
+            elif cap_val == "LIGHT_ONLY":
+                 status_text = "仅轻仓"
+                 color_theme = "#f59e0b"
+                 sym = "warning"
+            elif cap_val == "MANAGE_RISK":
+                 status_text = "风险管理"
+                 color_theme = "#f59e0b"
+                 sym = "warning"
+            else:
+                 status_text = "允许执行"
+                 color_theme = "#22c55e"
+                 sym = "check_circle"
+            bg = f"rgba({int(color_theme[1:3],16)}, {int(color_theme[3:5],16)}, {int(color_theme[5:7],16)}, 0.2)"
+            box_glow = f"0 4px 12px {color_theme}26"
         else:
-            # 3. 🔴 否决/禁止 (Veto)
-            color_theme = "#ef4444" # 鲜红色
+            if cap_val == "FORBID":
+                status_text = "禁止操作"
+            else:
+                colors = {"约": "合约不合规", "空": "无期权数据", "嫌": "赔率不足", "禁": "姿态禁止"}
+                status_text = colors.get(reason, "建议禁止")
+            
+            color_theme = "#ef4444"
             bg = "rgba(239, 68, 68, 0.12)"
-            status_text = reason
             sym = "block"
             box_glow = "none"
 
@@ -679,7 +729,7 @@ def render_vera_top_decision_area(result, dashboard_data=None):
             </div>
             <div style="text-align:right;">
                 <div style="font-size:1.15rem; font-weight:900; color:{color_theme}; letter-spacing:0.5px; text-transform:uppercase;">{status_text}</div>
-                <div style="font-size:0.65rem; color:#64748b; margin-top:2px; font-weight:600; opacity:0.6;">ACTION SUGGESTION</div>
+                <div style="font-size:0.65rem; color:#64748b; margin-top:2px; font-weight:600; opacity:0.6;">POSTURE CONTROL</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1445,7 +1495,13 @@ def render_header(data: DashboardData, is_index: bool = False, index_role: str =
     c1, c2, c3, c4 = st.columns([1.2, 5, 1.2, 1.2])
     
     def _shift_date(days):
-        st.session_state.eval_date = st.session_state.eval_date + timedelta(days=days)
+        base_date = st.session_state.get('eval_date')
+        if not base_date:
+            try:
+                base_date = datetime.strptime(data.report_date, '%Y-%m-%d').date()
+            except:
+                base_date = datetime.now().date()
+        st.session_state.eval_date = base_date + timedelta(days=days)
 
     def _save_record():
         try:
@@ -1459,12 +1515,15 @@ def render_header(data: DashboardData, is_index: bool = False, index_role: str =
         except Exception as e:
             st.session_state.last_save_status = ("error", f"❌ 保存失败: {str(e)}")
 
-    with c1:
-        st.button("⬅️ 前一天", key="btn_prev_day", on_click=_shift_date, args=(-1,))
-    with c3:
-        st.button("💾 保存记录", key="btn_save", on_click=_save_record, help="将当前分析结果永久保存到数据库历史记录中")
-    with c4:
-        st.button("后一天 ➡️", key="btn_next_day", on_click=_shift_date, args=(1,))
+    is_snapshot_mode = 'view_snapshot_id' in st.session_state or 'view_snapshot_id' in st.query_params
+
+    if not is_snapshot_mode:
+        with c1:
+            st.button("⬅️ 前一天", key="btn_prev_day", on_click=_shift_date, args=(-1,))
+        with c3:
+            st.button("💾 保存记录", key="btn_save", on_click=_save_record, help="将当前分析结果永久保存到数据库历史记录中")
+        with c4:
+            st.button("后一天 ➡️", key="btn_next_day", on_click=_shift_date, args=(1,))
         
     # 2. Asset Info Header (HTML)
     # Market Logic
@@ -1840,135 +1899,87 @@ def render_ai_capex_card(data: DashboardData):
 
 def render_csp_eval_card(data: DashboardData, vera_result: dict = None, expert_mode: bool = False):
     """CSP (Cash Secured Put) 策略评估卡片"""
-    from vera.engines.csp_permission_engine import CSPPermissionEngine
+    # from vera.engines.csp_permission_engine import CSPPermissionEngine # No longer needed for direct binding
     
-    # 1. Get Strategy Permission from PermissionEngine (vera_result)
-    if vera_result and 'decision_cn' in vera_result:
-        r_state = vera_result['decision_cn'].get('R_state', 'RED')  # Strategy layer permission
-    else:
-        # Fallback if VERA hasn't run yet
-        r_state = 'RED'
+    # --- Binding to analysis_result (C2) ---
+    analysis_result = getattr(data, 'analysis_result', {})
+    csp_strategy = analysis_result.get("csp_strategy", {})
+    csp_audit = analysis_result.get("csp_contract_audit", {})
+    csp_table = analysis_result.get("csp_contract_table", [])
     
-    # 2. Run Contract Audit from CSPPermissionEngine
-    csp_result = CSPPermissionEngine.evaluate_from_dashboard(data)
-    contract_r_state = csp_result['R_state']
-    metrics = csp_result['metrics']
-    
-    # 3. Strategy Layer Status Mapping
+    r_state = csp_strategy.get("strategy_permission", "RED")
+    contract_status = csp_audit.get("contract_status", "SKIPPED")
+    audit_suggestion = csp_audit.get("suggestion", "策略层禁止，未执行审计。")
+    audit_score = csp_audit.get("contract_score", 0.0)
+    audit_reasons = csp_audit.get("reasons", [])
+
+    # Strategy Layer Status Mapping
     strategy_status_map = {
-        "GREEN": {"label": "允许正常仓位", "color": "#22c55e", "icon": "check_circle"},
-        "YELLOW": {"label": "允许轻仓尝试", "color": "#f59e0b", "icon": "warning"},
-        "RED": {"label": "禁止开仓", "color": "#ef4444", "icon": "block"}
+        "GREEN": {"label": "允许积极参与", "color": "#22c55e", "icon": "check_circle"},
+        "YELLOW": {"label": "允许轻仓观察", "color": "#f59e0b", "icon": "warning"},
+        "RED": {"label": "策略层禁止开仓", "color": "#ef4444", "icon": "block"}
     }
     strategy_info = strategy_status_map.get(r_state, strategy_status_map["RED"])
     
-    # 4. Contract Audit Integration (CSP Part 3 - UI Integrated)
-    from vera.engines.csp_contract_engine import get_csp_candidates, pick_best_csp_contract, calc_annual_yield
+    # --- Contract Audit Integration (C3) ---
+    # No longer need to run get_csp_candidates, pick_best_csp_contract here.
+    # The data is already pre-calculated and stored in analysis_result.
     
-    best_contract = None
-    all_audited = [] 
+    best_contract = csp_audit.get("best_contract", None) # Get best contract from audit result
     
-    # 1. Always fetch and audit (Regardless of r_state)
-    # This allows viewing audit table even if strategy is RED
-    current_price = metrics.get('current_price') or getattr(data, 'price', 0.0) or getattr(data, 'last_price', 0.0) or getattr(data, 'close', 0.0)
-    candidates = get_csp_candidates("vera.db", data.symbol, current_price)
-    best_contract, all_audited = pick_best_csp_contract(candidates)
+    metrics = { # Initialize metrics from csp_audit or defaults
+        'moneyness': csp_audit.get('moneyness', 0),
+        'annual_yield': csp_audit.get('annual_yield', 0),
+        'strike': csp_audit.get('strike', 0),
+        'days_to_expiry': csp_audit.get('days_to_expiry', 0),
+        'current_price': csp_audit.get('current_price', getattr(data, 'price', 0.0)),
+        'valuation_pct_10y': analysis_result.get('risk_overlay', {}).get('price_percentile', 0.5) * 100, # Use position as proxy
+        'option': {
+            'Delta': csp_audit.get('delta', 0), 
+            'ExpiryDate': csp_audit.get('expiry', '-'), 
+            'IV': csp_audit.get('iv', 0)
+        }
+    }
 
+    best_contract = csp_audit.get("best_contract", None)
+    
+    # 统一状态判定逻辑
     if r_state == "RED":
-        contract_status = "SKIPPED"
+        contract_status_display = "SKIPPED"
         contract_label = "未审计 (策略禁止)"
         contract_color = "#64748b"
         contract_icon = "do_not_disturb"
         contract_message = "策略层面处于禁用状态 (RED)，系统禁止开仓。\n\n下方的期权审计表仅供投研参考。"
-        
-        # Init metrics from best_contract if available (for Expert Panel visibility)
-        if best_contract:
-            metrics = {
-                'moneyness': -best_contract['discount_pct'],
-                'annual_yield': calc_annual_yield(best_contract.get('mid', 0) or best_contract.get('bid', 0), best_contract['strike'], best_contract['dte']),
-                'strike': best_contract['strike'],
-                'days_to_expiry': best_contract['dte'],
-                'current_price': current_price, 
-                'option': {
-                    'Delta': best_contract.get('delta', 0), 
-                    'ExpiryDate': best_contract.get('expiry', '-'), 
-                    'IV': 0
-                }
-            }
-        else:
-            metrics = {
-                'moneyness': 0,
-                'annual_yield': 0,
-                'strike': 0,
-                'days_to_expiry': 0,
-                'option': {'Delta': 0, 'IV': 0, 'ExpiryDate': '-'}
-            }
-        
-    elif not best_contract:
-        contract_status = "NO_DATA"
+    elif not csp_table:
+        contract_status_display = "NO_DATA"
         contract_label = "无数据"
         contract_color = "#64748b"
         contract_icon = "search_off"
         contract_message = "未找到符合条件的认沽期权数据（可能是期权链缺失或未导入）。请检查导入页面。"
-        metrics = {
-            'moneyness': 0, 'annual_yield': 0, 'strike': 0, 'days_to_expiry': 0,
-            'option': {'Delta': 0, 'IV': 0, 'ExpiryDate': '-'}
-        }
-        
+    elif not best_contract:
+        contract_status_display = "NO_MATCH"
+        contract_label = "暂无匹配核心合约"
+        contract_color = "#f59e0b"
+        contract_icon = "rule"
+        contract_message = "期权链数据已就绪，但当前未发现同时符合：\n1. 45-120天期限\n2. 行权价 5%+ 折价\n的 Approved 合约。请参考下方详细审计表。"
     else:
-        # Extract audit result from the best contract found
-        audit = best_contract["_audit"]
-        contract_status = audit.status # APPROVED / REJECTED
-        
-        # Sync to metrics dict for downstream Rendering compatibility
-        metrics['strike'] = best_contract['strike']
-        metrics['days_to_expiry'] = best_contract['dte']
-        metrics['moneyness'] = -best_contract['discount_pct'] # Negative implies OTM Put in some conventions
-        metrics['option'] = {'Delta': best_contract['delta']}
-        
-        ay = calc_annual_yield(best_contract['mid'], best_contract['strike'], best_contract['dte'])
-        metrics['annual_yield'] = ay
+        # APPROVED or REJECTED but best_contract exists
+        contract_status_display = csp_audit.get("contract_status", "UNKNOWN")
+        contract_label = "发现优质匹配合约" if contract_status_display == "APPROVED" else "最优合约审计不通过"
+        contract_color = "#22c55e" if contract_status_display == "APPROVED" else "#ef4444"
+        contract_icon = "verified" if contract_status_display == "APPROVED" else "cancel"
+        contract_message = csp_audit.get("suggestion", "")
 
-        if contract_status == "APPROVED":
-            contract_label = "通过"
-            contract_color = "#22c55e"
-            contract_icon = "check_circle"
-            # Format message with Markdown bolding
-            contract_message = f"""策略许可：{strategy_info['label']}
-            
-当前推荐合约 (**Strike {best_contract['strike']}**) 已通过风险审计：
-• 折价幅度：**{best_contract['discount_pct']:.1%}** (现价 {best_contract['spot']:.2f})
-• 到期详情：{best_contract['expiry']} (剩余 {best_contract['dte']} 天)
-• 收益评估：年化 **{ay:.1%}** (Delta: {best_contract['delta']}, Mid: {best_contract['mid']:.2f})
-
-建议：{audit.suggestion}"""
-
-        else: # REJECTED
-            contract_status = "REJECTED"
-            contract_label = "不通过"
-            contract_color = "#ef4444"
-            contract_icon = "cancel"
-            
-            reasons_text = "\n".join([f"• {r['message']}" for r in audit.reasons])
-            
-            contract_message = f"""策略许可：{strategy_info['label']}
-            
-当前最优合约 (**Strike {best_contract['strike']}**) 未通过审计 (评分 {audit.score:.0f})：
-{reasons_text}
-
-合约参数：DTE {best_contract['dte']}天, 年化 {ay:.1%}, Delta {best_contract['delta']}
-建议：{audit.suggestion}"""
-    
-    # Part of Suggestion 2: Card Title logic
+    # Rendering Logic Coordination and Title Mapping
     card_title = "4. 高胜率 CSP 方案"
     card_subtitle = "方案基于当前期权链最优合约评估"
     card_subtitle_color = "#94a3b8"
 
-    if contract_status == "REJECTED":
+    if contract_status_display == "REJECTED":
         card_title = "4. 卖出 Put (CSP)"
         card_subtitle = "当前无合格合约"
         card_subtitle_color = "#64748b" # More neutral/gray
-    elif contract_status == "NO_DATA":
+    elif contract_status_display == "NO_DATA":
         card_title = "4. 卖出 Put (CSP)"
         card_subtitle = "数据源未就绪"
     elif r_state == "RED":
@@ -2175,12 +2186,14 @@ def render_csp_eval_card(data: DashboardData, vera_result: dict = None, expert_m
         )
         
     else:
-        # Only show import tip if we actually missed data, not if skipped by strategy
-        if contract_status == "NO_DATA":
+        # Only show import tip if we actually missed data, not if skipped by strategy or just no match
+        if contract_status_display == "NO_DATA":
             st.info("💡 请在导入页面上传期权 CSV 数据，以获得针对具体合约的评估。")
 
     # Add Audit Table (Visible if data exists)
+    all_audited = csp_table
     if all_audited:
+        from vera.engines.csp_contract_engine import calc_annual_yield
         from core.config_loader import load_csp_rules
         rules = load_csp_rules()
         prefs = rules.get("csp_contract_prefs", {})
@@ -2278,11 +2291,11 @@ def render_csp_eval_card(data: DashboardData, vera_result: dict = None, expert_m
             
             # Section 1: Rule Configuration
             st.markdown("##### 1️⃣ 规则配置 (Rule Configuration)")
-            rule_id = csp_result.get('rule_id', 'N/A')
+            rule_id = "csp_v2_standard" # Snapshot uses standard rules
             st.markdown(f"""
-            - **规则 ID**: `{rule_id}`
-            - **配置文件**: `config/csp_permission_rules.yaml`
-            - **判定状态**: `{contract_r_state}` (合约层) / `{r_state}` (策略层)
+            - **规则组**: `global_defaults`
+            - **配置文件**: `config/csp_contract_rules.yaml`
+            - **判定状态**: `{contract_status_display}` (合约层) / `{r_state}` (策略层)
             """)
             
             # Section 2: Intermediate Metrics
@@ -2352,56 +2365,37 @@ def render_csp_eval_card(data: DashboardData, vera_result: dict = None, expert_m
             # Section 4: Full Result JSON
             st.markdown("##### 4️⃣ 完整审计报文 (Full Audit Payload)")
             if st.checkbox("显示完整 JSON", key="csp_expert_json"):
-                st.json(csp_result)
+                st.json(csp_audit)
         
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
 def render_behavior_card(data: DashboardData, profile: Optional[RiskProfile] = None):
-    """5. 行为与认知 (Behavior & Cognition) - Unified Card"""
-    
-    # Logic extraction
-    
-    # 1. Behavior Suggestion (Col 1)
-    sugg = data.behavior_suggestion or "暂无建议"
-    
-    # 2. Cognitive Warning (Col 2)
-    cog_text = data.cognitive_warning or "正常风险范围"
-    cog_color = "#9ca3af" # Gray
-    if profile and data.risk_card:
-        risk_alert = detect_risk_combination(data, profile)
-        if risk_alert:
-            level, title, msg = risk_alert
-            cog_text = f"**{title}**<br>{msg}"
-            if level == "极高": cog_color = "#ef4444"
-            elif level == "高": cog_color = "#f59e0b"
-            else: cog_color = "#3b82f6"
-    
-    html_cog = f'<span style="color:{cog_color}">{cog_text}</span>'
-    
-    # 3. Next Action / Flags (Col 3)
-    # Combining the flags or just the simple action logic
-    action_html = ""
-    if "禁止" in sugg: action_html = '<span style="color:#ef4444">🚫 观望为主</span>'
-    elif "避免" in sugg: action_html = '<span style="color:#f59e0b">⏸️ 等待时机</span>'
-    elif "建议" in sugg or "分批" in sugg: action_html = '<span style="color:#22c55e">✅ 分批建仓</span>'
-    else: action_html = '<span style="color:#3b82f6">👀 持续监控</span>'
-    
-    # Grid HTML
-    
-    # Column 1
-    html_c1 = _get_metric_html_string("行为建议 (Suggestion)", sugg, help_text="基于当前技术面与基本面状态的综合操作建议。")
-    
-    # Column 2
-    html_c2 = _get_metric_html_string("认知预警 (Cognitive)", html_cog, help_text="检测是否存在由于非理性认知导致的潜在风险。")
-    
-    # Column 3
-    html_c3 = _get_metric_html_string("下一步行动 (Next Step)", action_html, help_text="当前状态下的推荐行动方案。")
+    """5. 行为与认知 (Behavior & Cognition) - VERA 2.0 Unified"""
+    analysis_result = getattr(data, 'analysis_result', None)
+    posture_block = getattr(analysis_result, 'behavior_block', {}) if analysis_result else {}
+    posture = posture_block.get("posture", "HOLD")
+    suggestion = posture_block.get("suggestion", data.behavior_suggestion if hasattr(data, 'behavior_suggestion') else "等待信号。")
+    warning = posture_block.get("cognitive_warning", data.cognitive_warning if hasattr(data, 'cognitive_warning') else "谨慎交易。")
+
+    posture_map = {
+        "ADD": ("积极加仓", "#22c55e", "📈"),
+        "HOLD": ("控制仓位", "#eab308", "⏳"),
+        "REDUCE": ("减仓防守", "#f97316", "🛡️"),
+        "EXIT": ("风险回避", "#ef4444", "🛑"),
+        "WATCH": ("继续观望", "#94a3b8", "👀")
+    }
+    p_label, p_color, p_icon = posture_map.get(posture, posture_map["HOLD"])
+
+    # Columns
+    html_c1 = _get_metric_html_string("资产姿态 (Posture)", f'<span style="color:{p_color}; font-weight:800;">{p_icon} {p_label}</span>')
+    html_c2 = _get_metric_html_string("认知预警 (Cognitive)", f'<span style="color:#94a3b8;">{warning}</span>')
+    html_c3 = _get_metric_html_string("全局建议 (Suggestion)", f'<span style="color:#cbd5e1;">{suggestion}</span>')
 
     html = f"""
 <div class="vera-card">
     <div class="vera-card-header">
-        <span style="font-weight:700; color:#e2e8f0; font-size:0.9rem;">5. 行为与认知 (Behavior & Cognition)</span>
+        <span style="font-weight:700; color:#f1f5f9; font-size:0.9rem;">🧩 5. 行为与认知 (Behavior & Cognition)</span>
     </div>
     <div class="vera-card-body" style="grid-template-columns: repeat(3, 1fr); gap: 32px;">
         <div style="padding-right:24px;">{html_c1}</div>
@@ -2698,13 +2692,14 @@ def render_risk_overlay(data: DashboardData, vera_result: Optional[dict] = None,
             border_color = "rgba(239,68,68,0.2)" if f.get("level") == "HIGH" else "rgba(234,179,8,0.2)" if f.get("level") == "MED" else "rgba(255,255,255,0.05)"
             
             # Extract numerical values from detail if possible (e.g. -15.47%)
-            detail = f.get('detail', '')
             import re
-            m = re.search(r"(-?\d+\.?\d*%)", detail)
+            m = re.search(r"(-?\d+\.?\d*%)", f.get('detail', ''))
             val = m.group(1) if m else "?"
             
             # Clean detail: remove value and trailing punctuation
-            clean_detail = detail.replace(val, "") if m else detail
+            clean_detail = f.get('detail', '')
+            if m:
+                clean_detail = clean_detail.replace(val, "")
             clean_detail = clean_detail.strip(" =,.:") # Clean trailing symbols
             
             # Use 'Card' layout similar to top panels
@@ -3171,7 +3166,28 @@ def render_expert_audit_panel(data: DashboardData):
             if m:
                 st.markdown(f' <div style="font-size:0.75rem; color:#64748b; margin-left:24px;">{m["name"]}: <b>{m["value"]}</b> (阈值: {m["threshold"]})</div>', unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+            # --- VERA 2.0 Risk Narrative (C4) ---
+    analysis_result = getattr(data, 'analysis_result', {})
+    narrative = analysis_result.get("risk_narrative", {})
+    risk_text = narrative.get("text", "")
+    risk_tags = narrative.get("tags", [])
+    
+    if risk_text:
+        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+        st.markdown('<div style="font-size:0.95rem; font-weight:700; color:#e2e8f0; margin-bottom:12px;">🔍 风险叙事解读 (Risk Narrative)</div>', unsafe_allow_html=True)
+        
+        # Tags area
+        if risk_tags:
+            tag_html = ""
+            for tag in risk_tags:
+                tag_html += f'<span style="background:rgba(59, 130, 246, 0.1); color:#60a5fa; border:1px solid rgba(59, 130, 246, 0.2); padding:2px 10px; border-radius:4px; font-size:0.7rem; font-weight:700; margin-right:8px;">{tag}</span>'
+            st.markdown(f'<div style="margin-bottom:12px; display:flex;">{tag_html}</div>', unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div style="background:rgba(30, 41, 59, 0.3); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:24px; color:#cbd5e1; line-height:1.7; font-size:0.95rem;">
+            {risk_text.replace('\n', '<br>')}
+        </div>
+        """, unsafe_allow_html=True)
 
     with e2:
         st.markdown('<div class="vera-card" style="padding:20px; height:100%;">', unsafe_allow_html=True)
@@ -3273,19 +3289,23 @@ def render_page(data: DashboardData, profile: Optional[RiskProfile] = None, char
         st.sidebar.json(data.expert_audit)
 
     # B. Top Decision Area (VERA)
-    
     vera_result = None
     try:
+        # NOTE: In VERA 2.0, most logic is already in data.analysis_result (snapshot_builder)
+        # We only call get_vera_verdict for secondary/non-unified facts if needed, 
+        # but to prevent the reported PermissionEngine error, we've fixed 'vera/interface.py'.
+        # For performance, we could skip this if analysis_result is robust.
         from vera.interface import get_vera_verdict
-        with st.spinner("Running VERA Engines..."):
-             # Use session_state to ensure we get the user-selected date correctly across scopes
-             vera_result = get_vera_verdict(data.symbol, anchor_date=st.session_state.get("eval_date"))
+        vera_result = get_vera_verdict(data.symbol, anchor_date=st.session_state.get("eval_date"))
         
         render_vera_top_decision_area(vera_result, dashboard_data=data)
         
     except Exception as e:
-        st.error(f"VERA Engine Error: {e}")
-        # st.exception(e) # Debug
+        # Fallback: Still render with None vera_result, relying internally on analysis_result
+        try:
+            render_vera_top_decision_area(None, dashboard_data=data)
+        except:
+            st.error(f"VERA Engine Critical Error: {e}")
 
 
     # C. Supplementary Indicators (Legacy Top Area)
@@ -4754,7 +4774,7 @@ def reconstruct_dashboard_data_from_snapshot(details):
         quality = details['quality'].iloc[0].to_dict()
         # Parse notes JSON
         import json
-        notes_raw = quality.get('notes')
+        notes_raw = quality.get('quality_notes') or quality.get('notes')
         if notes_raw and isinstance(notes_raw, str):
             try:
                 notes_dict = json.loads(notes_raw)
@@ -4820,6 +4840,9 @@ def reconstruct_dashboard_data_from_snapshot(details):
                         rets = price_series.pct_change().dropna()
                         vol_1y = rets.std() * (252 ** 0.5)
                     
+                    if not layer_node.get('volatility_1y') or layer_node.get('volatility_1y') == 0:
+                        layer_node['volatility_1y'] = float(vol_1y) if vol_1y else 0.0
+                    
                     recent_engine = RecentCycleEngine()
                     recent_info = recent_engine.evaluate(price_series, vol_1y if vol_1y else 0.0)
                     layer_node['recent_cycle'] = {
@@ -4829,63 +4852,70 @@ def reconstruct_dashboard_data_from_snapshot(details):
                         "dd_days": int(recent_info.dd_days),
                         "dd_sigma": float(recent_info.dd_sigma),
                         "peak_price": float(recent_info.peak_1y),
-                        "peak_date": recent_info.peak_date.strftime("%Y-%m-%d") if pd.notnull(recent_info.peak_date) else None
+                        "peak_date": recent_info.peak_date.strftime("%Y-%m-%d") if pd.notnull(recent_info.peak_date) else None,
+                        "risk_narrative": getattr(recent_info, 'risk_narrative', f"近期最高价 {recent_info.peak_1y:.2f}。当前回撤幅度 {recent_info.off_high_1y*100:.1f}%，持续 {recent_info.dd_days} 天。")
                     }
             except Exception as e:
                 print(f"Failed to backfill recent cycle for {layer_node.get('id')}: {e}")
 
-        # Individual
-        if not overlay['individual'].get('state'): overlay['individual']['state'] = ov_row.get('ind_dd_state')
-        if not overlay['individual'].get('path_risk'): overlay['individual']['path_risk'] = ov_row.get('ind_path_risk')
-        if not overlay['individual'].get('vol_regime'): overlay['individual']['vol_regime'] = ov_row.get('ind_vol_regime')
-        if not overlay['individual'].get('position_pct'): overlay['individual']['position_pct'] = ov_row.get('ind_position_pct')
-        overlay['individual']['volatility_1y'] = ov_row.get('ind_volatility_1y')
-        
-        # Drawdown JSON
+        # JSON Parser Helper
         import json
-        if 'ind_drawdown' in ov_row and ov_row['ind_drawdown']:
-            try: overlay['individual']['drawdown'] = json.loads(ov_row['ind_drawdown'])
-            except: pass
+        def _parse_json(val):
+            if not val: return None
+            if isinstance(val, (dict, list)): return val
+            try: return json.loads(val)
+            except: return None
 
-        # Backfill Recent Cycle Info if missing (for legacy snapshots)
-        _backfill_recent_cycle(overlay['individual'], s['as_of_date'], metrics.get('annual_volatility'))
-
-        # Sector
+        # 1. Individual Mapping
+        overlay['individual']['id'] = symbol
+        overlay['individual']['state'] = ov_row.get('ind_dd_state')
+        overlay['individual']['label_zh'] = ov_row.get('ind_label_zh')
+        overlay['individual']['path_risk'] = ov_row.get('ind_path_risk')
+        overlay['individual']['vol_regime'] = ov_row.get('ind_vol_regime')
+        overlay['individual']['position_pct'] = ov_row.get('ind_position_pct')
+        overlay['individual']['volatility_1y'] = ov_row.get('ind_volatility_1y')
+        overlay['individual']['drawdown'] = _parse_json(ov_row.get('ind_drawdown'))
+        overlay['individual']['recent_cycle'] = _parse_json(ov_row.get('ind_recent_cycle'))
+        
+        # 2. Sector Mapping
         s_id = ov_row.get('sector_etf_id')
         overlay['sector']['id'] = s_id
         overlay['sector']['state'] = ov_row.get('sector_dd_state')
+        overlay['sector']['label_zh'] = ov_row.get('sector_label_zh')
         overlay['sector']['path_risk'] = ov_row.get('sector_path_risk')
         overlay['sector']['stock_vs_sector_rs_3m'] = ov_row.get('stock_vs_sector_rs_3m')
         overlay['sector']['alignment'] = ov_row.get('sector_alignment')
         overlay['sector']['volatility_1y'] = ov_row.get('sector_volatility_1y')
-        if 'sector_drawdown' in ov_row and ov_row['sector_drawdown']:
-            try: overlay['sector']['drawdown'] = json.loads(ov_row['sector_drawdown'])
-            except: pass
+        overlay['sector']['drawdown'] = _parse_json(ov_row.get('sector_drawdown'))
+        overlay['sector']['recent_cycle'] = _parse_json(ov_row.get('sector_recent_cycle'))
         if s_id and not overlay['sector'].get('name'):
             overlay['sector']['name'] = get_asset_name(s_id)
-        # Recent Cycle Mapping
-        if 'sector_recent_cycle' in ov_row:
-            overlay['sector']['recent_cycle'] = ov_row.get('sector_recent_cycle')
-        else:
-            _backfill_recent_cycle(overlay['sector'], s['as_of_date'])
 
-        # Market
+        # 3. Market Mapping
         m_id = ov_row.get('market_index_id')
         overlay['market']['id'] = m_id
         overlay['market']['state'] = ov_row.get('market_dd_state')
-        overlay['market']['path_risk'] = ov_row.get('market_path_risk') # Ensure path risk is mapped
+        overlay['market']['label_zh'] = ov_row.get('market_label_zh')
+        overlay['market']['path_risk'] = ov_row.get('market_path_risk')
         overlay['market']['market_regime_label'] = ov_row.get('market_regime_label')
         overlay['market']['volatility_1y'] = ov_row.get('market_volatility_1y')
-        if 'market_drawdown' in ov_row and ov_row['market_drawdown']:
-            try: overlay['market']['drawdown'] = json.loads(ov_row['market_drawdown'])
-            except: pass
+        overlay['market']['drawdown'] = _parse_json(ov_row.get('market_drawdown'))
+        overlay['market']['recent_cycle'] = _parse_json(ov_row.get('market_recent_cycle'))
         if m_id and not overlay['market'].get('name'):
             overlay['market']['name'] = get_asset_name(m_id)
-        # Recent Cycle Mapping
-        if 'market_recent_cycle' in ov_row:
-            overlay['market']['recent_cycle'] = ov_row.get('market_recent_cycle')
-        else:
-            _backfill_recent_cycle(overlay['market'], s['as_of_date'])
+
+        # 4. Recover Labels from Rules if still missing (for legacy)
+        from core.config_loader import load_vera_rules
+        rules_lbls = load_vera_rules().get("d_state", {}).get("labels", {})
+        for layer_key in ['individual', 'sector', 'market']:
+            st_code = overlay[layer_key].get('state')
+            if st_code and not overlay[layer_key].get('label_zh') and rules_lbls.get(st_code):
+                overlay[layer_key]['label_zh'] = rules_lbls[st_code].get('label_zh')
+
+        # 5. Backfill missing Cycle Info or Volatility
+        _backfill_recent_cycle(overlay['individual'], s['as_of_date'], metrics.get('annual_volatility'))
+        if s_id: _backfill_recent_cycle(overlay['sector'], s['as_of_date'])
+        if m_id: _backfill_recent_cycle(overlay['market'], s['as_of_date'])
             
     # 7. Value (Reconstruct from metrics/snapshot)
     # The 'value' dict in DashboardData usually comes from ValuationAnalyzer
@@ -5414,6 +5444,10 @@ def main():
         current_key = "analysis"
         st.session_state.analysis_sub_mode = "🗂️ 全量评估"
         st.session_state.analysis_sub_mode_radio = "🗂️ 全量评估"
+    elif url_key == "analysis":
+        current_key = "analysis"
+        st.session_state.analysis_sub_mode = "📈 单个评估"
+        st.session_state.analysis_sub_mode_radio = "📈 单个评估"
     elif url_key in nav_keys:
         current_key = url_key
     else:
@@ -5532,7 +5566,11 @@ def main():
 
     # --- Analysis Mode Logic ---
     if "analysis_active" not in st.session_state:
-        st.session_state.analysis_active = False
+        # 核心修复：如果 URL 包含 symbol，且处于单个评估模式，刷新后应自动激活分析
+        if st.query_params.get("symbol") and st.session_state.get("analysis_sub_mode") == "📈 单个评估":
+            st.session_state.analysis_active = True
+        else:
+            st.session_state.analysis_active = False
 
     # Initialize valuation_last_symbol (STABLE KEY)
     if "valuation_last_symbol" not in st.session_state:

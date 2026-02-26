@@ -1,0 +1,65 @@
+# VERA CSP Contract Audit Rules
+# Used by CSPContractAuditEngine (B1)
+
+# Global default thresholds
+global_defaults:
+  tenor_days:
+    min: 15
+    max: 90
+    preferred_min: 30
+    preferred_max: 60
+  
+  delta:
+    min: -0.35
+    max: -0.10
+    preferred_abs: 0.20
+  
+  moneyness:
+    min_discount_pct: 0.05
+  
+  yield_metrics:
+    min_annual_yield: 0.08
+    soft_yield_good: 0.15
+
+# Adjustment logic based on valuation
+valuation_adjustments:
+  # If deep undervalue, allow tighter discount but require higher yield
+  - when_valuation_pctile: [0, 20]
+    adjust:
+      min_discount_pct: 0.03
+      min_annual_yield: 0.10
+  # If overvalued, require deeper discount
+  - when_valuation_pctile: [80, 100]
+    adjust:
+      min_discount_pct: 0.10
+      max_delta: -0.15
+
+# Adjustment logic based on quality
+quality_adjustments:
+  - when_quality_grade: "LOW"
+    adjust:
+      min_discount_pct: 0.15
+      min_score_pass: 80
+  - when_quality_grade: "HIGH"
+    adjust:
+      min_discount_pct: 0.04
+
+# Scoring Weights (Total 100)
+scoring_weights:
+  discount: 30
+  yield: 30
+  delta: 20
+  dte: 20
+
+# Pass criteria
+pass_thresholds:
+  min_score_pass: 60
+
+# Failure reason messages
+fail_reason_messages:
+  STRIKE_TOO_CLOSE: "行权价距离现价太近，安全垫不足。"
+  YIELD_TOO_LOW: "权利金年化收益率未达到最低要求。"
+  DTE_OUT_OF_RANGE: "到期时间过短或过长，不符合 CSP 策略偏好。"
+  DELTA_OUT_OF_RANGE: "Delta 风险暴露过高。"
+  IV_TOO_EXTREME: "隐含波动率处于极端状态，定价不稳。"
+  NO_LIQUIDITY: "合约流动性极差，难以成交。"

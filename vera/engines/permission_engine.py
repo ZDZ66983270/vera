@@ -6,21 +6,24 @@ class PermissionEngine:
     输出最终 R_state + 动作许可
     """
 
-    def evaluate(self, U_state: str, O_state: str) -> dict:
-        # 一票否决权 (U3 is always RED)
-        if U_state == "U3_DISCOVERY":
-            return self._red_state("Price discovery phase (U3)")
+    def evaluate(self, risk: dict, valuation: dict, quality: dict) -> dict:
+        """
+        策略层许可评估 (A2.1)
+        """
+        d_state = risk.get("D_state", "UNKNOWN")
+        val_pct = valuation.get("valuation_percentile", 50.0)
+        qual_grade = quality.get("grade", "MEDIUM")
 
-        if U_state == "U4_STABILIZATION":
-            return self._yellow_state("Stabilization phase (U4)")
+        # 示例逻辑：如果处于极端风险 D3/D5，强制 RED
+        if d_state in ["D3", "D5"]:
+            return self._red_state(f"Market Discovery/Collapse ({d_state})")
 
-        # Green Light Conditions
-        # Reversal OR Range, combined with IV Crush (Efficiency Window)
-        if U_state in ["U5_REVERSAL", "U2_RANGE"] and O_state == "O3_IV_CRUSH":
-            return self._green_state(f"{U_state} with IV Crush")
+        # 如果估值适中且处于安全区 D0/D4，绿色
+        if d_state in ["D0", "D4"] and val_pct < 60:
+            return self._green_state(f"Safe structural zone ({d_state}) with fair valuation")
 
-        # Default to YELLOW (Transition or Mixed signals)
-        return self._yellow_state(f"Transition state ({U_state} + {O_state})")
+        # 其他情况黄色
+        return self._yellow_state(f"Wait and see ({d_state})")
 
     def _red_state(self, reason):
         return {

@@ -1,0 +1,53 @@
+meta:
+  version: 1
+  description: >
+    行为姿态 (posture) 决策规则。
+    综合价格结构、估值水位、质量缓冲、短窗风险等维度，
+    给出 ADD / HOLD / REDUCE / EXIT 的统一姿态。
+
+priority_order:
+  # 高优先级规则先匹配，命中后直接返回 posture
+  - name: "Hard Exit"
+    posture: "EXIT"
+    when:
+      valuation_percentile_min: 80        # 估值严重偏贵
+      quality_grade_in: ["LOW"]           # 质量差
+      short_window_r_state_in: ["R4"]     # 短窗 Crash
+  - name: "Reduce on Expensive Reversal"
+    posture: "REDUCE"
+    when:
+      price_structure_in: ["US_REVERSAL"] # 已反转确认（价格维度）
+      valuation_percentile_min: 70        # 估值偏贵及以上
+      quality_grade_in: ["LOW", "MEDIUM"] # 质量一般或偏差
+  - name: "Reduce on High Risk"
+    posture: "REDUCE"
+    when:
+      valuation_percentile_min: 75        # 贵
+      short_window_r_state_in: ["R2", "R4"]   # 结构性回调或短窗剧烈波动
+  - name: "Hold on Neutral Reversal"
+    posture: "HOLD"
+    when:
+      price_structure_in: ["US_REVERSAL"]
+      valuation_percentile_min: 35
+      valuation_percentile_max: 75
+      quality_grade_in: ["MEDIUM", "LOW"]
+  - name: "Add on Cheap Reversal"
+    posture: "ADD"
+    when:
+      price_structure_in: ["US_REVERSAL"]
+      valuation_percentile_max: 35        # 估值偏低/合理偏低
+      quality_grade_in: ["HIGH", "MEDIUM"]
+      short_window_r_state_not_in: ["R4"] # 避免在 Crash 正中间激进加仓
+  - name: "Hold Neutral"
+    posture: "HOLD"
+    when:
+      valuation_percentile_min: 35
+      valuation_percentile_max: 75
+  - name: "Reduce Expensive"
+    posture: "REDUCE"
+    when:
+      valuation_percentile_min: 75
+
+fallback:
+  posture: "HOLD"
+  reason: "未命中任何规则，默认保持中性持仓。"

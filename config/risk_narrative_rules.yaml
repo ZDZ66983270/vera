@@ -1,242 +1,52 @@
-version: 1.0
-updated_at: "2026-02-23"
+# VERA Risk Narrative Rules
+# Used by RiskNarrativeEngine (B2)
 
-########################################################
-# Risk Narrative Rules
-# 用于生成：
-# - 长周期位置叙述（10Y）
-# - 近期（1Y）回撤与跌速叙述
-# - 组合型解读（泡沫/低谷/急跌）
-########################################################
-
-meta:
-  # 度量字段约定，方便代码中统一读取
-  metrics:
-    position_10y_pctile: "position_10y_pctile"          # 0-100，价格在10年区间中的分位
-    max_dd_10y_pct: "max_drawdown_10y_pct"              # 10年最大回撤，负数，例如 -45.0
-    max_dd_1y_pct: "max_drawdown_1y_pct"                # 最近1年最大回撤，负数
-    days_to_max_dd_10y: "days_to_max_dd_10y"            # 形成10年最大回撤所用交易日数
-    days_to_max_dd_1y: "days_to_max_dd_1y"              # 最近1年最大回撤形成用时
-    dd_1y_vs_10y_ratio: "dd_1y_vs_10y_ratio"            # |DD_1Y| / |DD_10Y|，0–1
-    pe_history_years: "pe_history_years"                # 可用 PE 历史年份
-    valuation_bucket: "valuation_bucket"                # CHEAP / NEUTRAL / EXPENSIVE（来自 vera_rules.yaml）
-    quality_grade: "quality_grade"                      # HIGH / MEDIUM / LOW（来自质量缓冲引擎）
-
-########################################################
-# 1. 长周期位置区间 (10Y Position Bands)
-########################################################
-
-long_cycle:
-
-  position_bands:
-    # 低位区：狗落后主人
-    - key: LOW
-      range: [0, 20]             # [0,20)
-      label_zh: "长期低位区"
-      label_en: "Long-term Low Zone"
-      narrative_zh: "价格位于近10年区间的低位（约前{position_pct:.0f}%），'狗明显落后主人'。"
-      narrative_en: "Price sits in the lower {position_pct:.0f}% of its 10-year range – the dog is clearly lagging its owner."
-
-    # 中位区：中性
-    - key: MID
-      range: [20, 80]            # [20,80)
-      label_zh: "长期中位区"
-      label_en: "Long-term Mid Zone"
-      narrative_zh: "价格在近10年区间的中段（约处于第{position_pct:.0f}% 分位），未明显偏离长期均值。"
-      narrative_en: "Price is around the mid range (≈{position_pct:.0f}th percentile) of the last 10 years, without extreme deviations."
-
-    # 高位区：狗跑在主人前面
-    - key: HIGH
-      range: [80, 100]           # [80,100]
-      label_zh: "长期高位区"
-      label_en: "Long-term High Zone"
-      narrative_zh: "价格接近近10年区间的高位（约后{upper_pct:.0f}%），'狗已经明显跑在主人前面'。"
-      narrative_en: "Price is near the top {upper_pct:.0f}% of its 10-year range – the dog is clearly ahead of its owner."
-
-  # 10年最大回撤分级，用于补充一句说明“这条路有多陡”
-  max_dd_bands:
-    - key: MILD
-      # -15% 以内
-      range: [0, 15]
-      label_zh: "历史回撤较浅"
-      label_en: "Historically mild drawdowns"
-      narrative_zh: "过去10年的最大回撤约为 {max_dd_10y_abs:.1f}%，整体历史下行并不极端。"
-      narrative_en: "The 10-year maximum drawdown is about {max_dd_10y_abs:.1f}%, indicating historically mild downside."
-
-    - key: MODERATE
-      range: [15, 35]
-      label_zh: "历史回撤中等"
-      label_en: "Moderate historical drawdowns"
-      narrative_zh: "过去10年的最大回撤约为 {max_dd_10y_abs:.1f}%，属于中等强度的历史回撤。"
-      narrative_en: "The 10-year maximum drawdown of {max_dd_10y_abs:.1f}% suggests moderate historical downside."
-
-    - key: DEEP
-      range: [35, 100]
-      label_zh: "历史回撤较深"
-      label_en: "Deep historical drawdowns"
-      narrative_zh: "过去10年的最大回撤曾达到约 {max_dd_10y_abs:.1f}%，说明该资产在极端行情下的下行空间较大。"
-      narrative_en: "The 10-year maximum drawdown reached about {max_dd_10y_abs:.1f}%, indicating significant downside potential in stress periods."
-
-########################################################
-# 2. 近期（1Y）回撤与跌速 (Short-window Drawdown & Speed)
-########################################################
+long_horizon:
+  states:
+    D0_SAFE:
+      when: {d_states: ["D0", "D4"]}
+      text: "长周期处于结构性安全区。虽然可能存在短期波动，但下方历史支撑极强，适合长线布局。"
+    D1_BUBBLE:
+      when: {d_states: ["D1"]}
+      text: "当前处于长周期扩张末端，历史溢价过高，需警惕长期均值回归的风险。"
+    D3_DISCOVERY:
+      when: {d_states: ["D3", "D5"]}
+      text: "长周期结构已破坏，正处于极其不稳定的‘价格发现’或‘下行寻找底部’阶段。"
+    DEFAULT:
+      text: "长周期处于均值博弈区，缺乏极端的确定性机会。"
 
 short_window:
+  regimes:
+    CRASH:
+      when: {min_1y_dd: 0.15, max_speed: 10}
+      text: "短期表现为‘暴跌’模式。抛压极度集中，流动性溢价可能暂时失效。"
+    CORRECTION:
+      when: {min_1y_dd: 0.05, max_speed: 30}
+      text: "短期处于常态化回调。属于技术性结构修正，需关注止跌信号。"
+    SIDEWAYS:
+      when: {max_1y_dd: 0.05}
+      text: "短期横盘整理。交投清淡或处于等待重大消息窗口，缺乏明确动量。"
 
-  # 最近1年最大回撤相对历史最大回撤的比例
-  # ratio = |DD_1Y| / |DD_10Y|
-  dd_ratio_bands:
-    - key: LIGHT
-      range: [0.0, 0.33]
-      label_zh: "本轮回撤较轻"
-      label_en: "Light recent drawdown"
-      narrative_zh: "最近1年最大回撤约为历史坑位的 {dd_ratio_pct:.0f}%，目前只是对长期趋势的常规波动。"
-      narrative_en: "The last 1-year max drawdown is about {dd_ratio_pct:.0f}% of the historical worst, a relatively light pullback versus long-term extremes."
+valuation_overlay:
+  CHEAP: "当前估值位于历史极端低位（分位 < 25%），安全垫极厚。"
+  NEUTRAL: "当前估值处于历史中枢附近，定价相对公允。"
+  EXPENSIVE: "当前估值明显偏高（分位 > 75%），需防范杀估值风险。"
 
-    - key: MEDIUM
-      range: [0.33, 0.66]
-      label_zh: "本轮回撤中等"
-      label_en: "Medium recent drawdown"
-      narrative_zh: "最近1年最大回撤已达到历史坑位的 {dd_ratio_pct:.0f}%，需要关注这是否演变为一轮完整的周期调整。"
-      narrative_en: "The last 1-year max drawdown has reached about {dd_ratio_pct:.0f}% of the historical worst, warranting attention for a possible full-cycle correction."
+price_structure:
+  US_REVERSAL:
+    title: "反转确认（价格结构维度）"
+    body: >
+      价格已突破关键阻力位或均线压制，底部形态基本确立，
+      在【价格路径】这一维度上，空头阶段告一段落，进入右侧交易区间。
+      是否加仓仍需结合估值、水位与整体风险信号综合判断。
+  US_TREND_DOWN:
+    title: "趋势性下跌（价格结构维度）"
+    body: >
+      价格处于持续下跌通道中，暂未出现有效的反转信号，
+      不宜仅凭短期反弹信号进行逆势加仓。
 
-    - key: HEAVY
-      range: [0.66, 1.5]   # 允许略超 100% 的异常情况
-      label_zh: "本轮回撤偏重"
-      label_en: "Heavy recent drawdown"
-      narrative_zh: "最近1年最大回撤已接近或超过历史最大坑位的 {dd_ratio_pct:.0f}%，短时间内重演了相当级别的跌幅。"
-      narrative_en: "The last 1-year max drawdown is close to or exceeds {dd_ratio_pct:.0f}% of the historical worst, effectively replaying a major drawdown in a short window."
-
-  # 跌速：最近1年大坑形成所用时间，相对于历史大坑的速度
-  # speed_ratio = days_to_max_dd_10y / days_to_max_dd_1y
-  speed_bands:
-    - key: SLOW
-      range: [0.0, 0.75]
-      label_zh: "下跌节奏较缓"
-      label_en: "Slow decline"
-      narrative_zh: "本轮回撤形成所用时间相对历史更慢，更多是“磨”的过程，而非单次急杀。"
-      narrative_en: "The time to form the recent drawdown is slower versus past extremes, resembling a grinding decline rather than a sudden crash."
-
-    - key: NORMAL
-      range: [0.75, 1.5]
-      label_zh: "下跌节奏中性"
-      label_en: "Normal decline pace"
-      narrative_zh: "本轮回撤的形成节奏与历史类似，处于常规周期波动区间。"
-      narrative_en: "The pace of the recent drawdown is broadly in line with historical patterns."
-
-    - key: FAST
-      range: [1.5, 99.0]
-      label_zh: "下跌节奏偏快"
-      label_en: "Fast crash-like pace"
-      narrative_zh: "本轮回撤在明显更短的时间内形成，跌速显著快于历史同级别回撤，更接近“短窗 Crash”。"
-      narrative_en: "The drawdown has formed in a much shorter time than past extremes, indicating a crash-like speed in a short window."
-
-########################################################
-# 3. 核心组合解读模式 (Composite Patterns)
-########################################################
-
-composite_patterns:
-
-  # 3.1 泡沫区：狗明显跑在前面
-  - key: LONG_TERM_BUBBLE
-    when:
-      position_band: ["HIGH"]              # 长期高位
-      valuation_bucket: ["EXPENSIVE"]      # 估值偏贵
-      quality_grade: ["LOW", "MEDIUM"]
-    narrative_zh: >
-      从长周期看，股价已处于10年区间的高位（狗跑在主人前面），
-      当前估值也处于偏贵区间，而基本面质量并不突出。
-      这更像是一段需要警惕的“泡沫区间”，任何新增仓位都应极度克制。
-    narrative_en: >
-      From a long-term perspective, price sits in the high band of its 10-year range (the dog is ahead of its owner),
-      valuation is expensive, and fundamental quality is not particularly strong.
-      This resembles a bubble-like zone where adding new exposure should be handled with extreme caution.
-
-  # 3.2 低谷区：狗明显落后主人，但质量尚可
-  - key: LONG_TERM_VALLEY
-    when:
-      position_band: ["LOW"]               # 长期低位
-      valuation_bucket: ["CHEAP"]
-      quality_grade: ["MEDIUM", "HIGH"]
-    narrative_zh: >
-      股价在近10年区间内明显偏低（狗大幅落后主人），
-      估值已处于便宜区域，且质量评分中等偏上。
-      这更像是长期低谷而非结构性恶化，但入场仍需节奏与仓位管理。
-    narrative_en: >
-      Price is clearly in the low band of its 10-year range (the dog is well behind its owner),
-      valuation screens as cheap while quality is average to strong.
-      This looks more like a long-term valley than structural decay, though position sizing and timing still matter.
-
-  # 3.3 短窗急跌：短时间重演历史跌幅
-  - key: SHORT_WINDOW_CRASH
-    when:
-      dd_ratio_band: ["HEAVY"]
-      speed_band: ["FAST"]
-    narrative_zh: >
-      最近1年内的最大回撤已接近历史深坑的大部分幅度，
-      且在显著更短的时间内完成，属于“短窗 Crash” 类型。
-      这类行情往往伴随情绪极端与流动性挤压，需要优先考虑风险控制而非孤注一掷的抄底。
-    narrative_en: >
-      The most recent 1-year drawdown has replayed a large portion of the historical worst in a much shorter time,
-      effectively a short-window crash.
-      Such episodes usually involve extreme sentiment and liquidity stress, where risk control takes priority over aggressive bottom-fishing.
-
-  # 3.4 常规调整：中等幅度+中性速度
-  - key: NORMAL_CORRECTION
-    when:
-      dd_ratio_band: ["MEDIUM"]
-      speed_band: ["SLOW", "NORMAL"]
-    narrative_zh: >
-      本轮回撤幅度处于中等区间，形成节奏也接近历史常规波动，
-      更像是一轮标准的周期性调整，而非系统性危机。
-      是否介入，取决于估值与质量是否匹配你的风险偏好。
-    narrative_en: >
-      The current drawdown is of moderate size and has formed at a pace consistent with past cycles,
-      resembling a standard cyclical correction rather than a systemic crisis.
-      Participation depends on whether valuation and quality align with your risk tolerance.
-
-########################################################
-# 4. 样本不足 & 免责声明 (Sample-size / Disclaimer)
-########################################################
-
-disclaimers:
-
-  pe_history:
-    min_years_for_full_cycle: 5
-    # 当 PE 历史小于该阈值时，附加一段提示，说明“长周期估值样本不足”
-    narrative_zh: >
-      当前估值分位仅基于约 {pe_history_years:.1f} 年的历史样本，
-      尚不足以代表完整周期，相关“高估/低估”判断应视为参考而非定论。
-    narrative_en: >
-      The current valuation percentile is based on only about {pe_history_years:.1f} years of data,
-      which may not fully represent a complete cycle. Any over/undervaluation judgement should be treated as indicative rather than definitive.
-
-########################################################
-# 5. 输出模板组合 (High-level Output Layout)
-########################################################
-
-output_layout:
-  # 建议后端/前端生成三段式风险解读：
-  sections:
-    - key: LONG_CYCLE_SECTION
-      title_zh: "长周期位置 (10Y)"
-      title_en: "Long-cycle Position (10Y)"
-      # 由 position_band + max_dd_band + （可选）composite_patterns 组装
-      include:
-        - position_band_narrative
-        - max_dd_10y_narrative
-        - composite_long_term_pattern   # 可为空
-
-    - key: SHORT_WINDOW_SECTION
-      title_zh: "近期回撤与跌速 (1Y)"
-      title_en: "Recent Drawdown & Speed (1Y)"
-      include:
-        - dd_ratio_band_narrative
-        - speed_band_narrative
-        - composite_short_window_pattern  # 可为空
-
-    - key: DISCLAIMER_SECTION
-      title_zh: "样本与模型说明"
-      title_en: "Sample & Model Notes"
-      include:
-        - pe_history_disclaimer
+templates:
+  default:
+    intro: "【VERA 风险解读】"
+    sections_order: ["long", "short", "val"]
+    outro: "（注：以上解读基于量化模型，不作为直接买卖建议。）"

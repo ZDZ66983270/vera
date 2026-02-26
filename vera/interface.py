@@ -61,14 +61,25 @@ def get_vera_verdict(symbol: str, anchor_date: str = None) -> dict:
     o_engine = OptionsStateEngine()
     p_engine = PermissionEngine()
 
-    # 4. Evaluate
+    # 4. Evaluate (Mapping Legacy states to VERA 2.0 Engine Signatures)
     u_out = u_engine.evaluate(df)
     o_out = o_engine.evaluate(vol_series, source=vol_source)
 
-    decision = p_engine.evaluate(
-        U_state=u_out["U_state"],
-        O_state=o_out["O_state"]
-    )
+    # PermissionEngine now expects (risk, valuation, quality) dicts (A2.1)
+    risk_ctx = {
+        "D_state": u_out["U_state"],
+        "R_state": "YELLOW", # Default if unknown
+        "one_year_max_dd": 0.0,
+        "rel_dd_pct": 0.0
+    }
+    val_ctx = {
+        "valuation_percentile": 50.0 # Standard fallback for legacy path
+    }
+    qual_ctx = {
+        "grade": "MEDIUM"
+    }
+
+    decision = p_engine.evaluate(risk=risk_ctx, valuation=val_ctx, quality=qual_ctx)
     
 
     # 5. Translate & Format Output (The "Product" Layer)

@@ -14,7 +14,6 @@ from analysis.trap_payout import detect_value_trap, calculate_payout_score
 from analysis.bank_quality import calc_bank_quality_score
 from analysis.conclusion import generate_conclusion, ConclusionInput
 from analysis.risk_matrix import build_risk_card
-from core.risk_narrative_engine import RiskNarrativeEngine  # NEW
 from analysis.dashboard import generate_dashboard_data, DashboardData
 from vera.explain.expert_audit_builder import ExpertAuditBuilder  # NEW
 from config import DEFAULT_LOOKBACK_YEARS
@@ -210,10 +209,12 @@ def run_snapshot(symbol: str, as_of_date=None, save_to_db: bool = False):
     # We resolve sector context here to see if it dictates a specific index (e.g. HK_TECH -> HSTECH)
     # ❗ FIX: Use canonical asset_id
     sector_ctx = resolve_sector_context(asset.asset_id, data_date.strftime("%Y-%m-%d") if isinstance(data_date, datetime) else data_date)
+    
+    # Pre-define market_index from market mapping
+    market_index = resolve_market_index(asset.market)
+
     if sector_ctx and sector_ctx.market_index_id:
         # Override the generic market index (e.g. HSI default) with specific (e.g. HSTECH)
-        # We need an AssetKey-like object or just the symbol. 
-        # market_index variable is an AssetKey, so we update its symbol.
         from engine.asset_resolver import AssetKey
         # Assume generic type is INDEX for now
         market_index = AssetKey(
@@ -464,6 +465,11 @@ def run_snapshot(symbol: str, as_of_date=None, save_to_db: bool = False):
             quality_buffer_level=quality.quality_buffer_level,
             quality_summary=quality.quality_summary,
             quality_template_name=quality.quality_template_name,
+            dividend_safety_level=quality.dividend_safety_level,
+            dividend_safety_label_zh=quality.dividend_safety_label_zh,
+            earnings_state_code=quality.earnings_state_code,
+            earnings_state_label_zh=quality.earnings_state_label_zh,
+            earnings_state_desc_zh=quality.earnings_state_desc_zh,
             notes=quality.notes
         )
         
@@ -551,49 +557,6 @@ def run_snapshot(symbol: str, as_of_date=None, save_to_db: bool = False):
     except Exception as e:
         print(f"Error fetching behavior flags: {e}")
 
-    # --- 7.7 Generate Advanced Risk Narrative (Custom rules) ---
-    try:
-        # Calculate years of PE history for disclaimer
-        pe_years = len(set([str(d)[:4] for d in hist_dates])) if hist_dates else 0
-        qual_grade_map = {"STRONG": "HIGH", "MODERATE": "MEDIUM", "WEAK": "LOW"}
-        
-        narrative_engine = RiskNarrativeEngine()
-        recent_cycle_data = risk_metrics.get('risk_state', {}).get('recent_cycle', {})
-        
-        nar_metrics = {
-            'position_10y_pctile': float(risk_metrics.get('price_percentile', 0.5)) * 100,
-            'max_drawdown_10y_pct': float(risk_metrics.get('max_drawdown', 0.0)) * 100,
-            'max_drawdown_1y_pct': float(recent_cycle_data.get('max_dd_1y', 0.0)) * 100,
-            'days_to_max_dd_10y': int(risk_metrics.get('mdd_duration_days', 1)),
-            'days_to_max_dd_1y': int(recent_cycle_data.get('dd_days', 1)),
-            'pe_history_years': float(pe_years),
-            'valuation_bucket': getattr(fundamentals, 'valuation_bucket', 'NEUTRAL'),
-            'quality_grade': qual_grade_map.get(quality.quality_buffer_level, "MEDIUM")
-        }
-        
-        # Calculate ratio
-        mdd_10y = abs(nar_metrics['max_drawdown_10y_pct'])
-        mdd_1y = abs(nar_metrics['max_drawdown_1y_pct'])
-        nar_metrics['dd_1y_vs_10y_ratio'] = mdd_1y / mdd_10y if mdd_10y > 0 else 0.0
-        
-        structured_narrative = narrative_engine.generate_narrative(nar_metrics)
-        
-        # Assemble final HTML string for UI
-        final_narrative_html = ""
-        # Follow output_layout sections order: LONG, SHORT, DISCLAIMER
-        for sec_key in ["LONG_CYCLE_SECTION", "SHORT_WINDOW_SECTION", "DISCLAIMER_SECTION"]:
-            if sec_key in structured_narrative:
-                sec = structured_narrative[sec_key]
-                if sec.get('content_zh'):
-                    # Use a clean layout for the narrative block
-                    final_narrative_html += f"<div style='margin-bottom:10px;'><b style='color:#94a3b8;'>{sec['title_zh']}:</b> {sec['content_zh']}</div>"
-        
-        if final_narrative_html:
-            # Inject into the existing narrative field used by app.py
-            if 'recent_cycle' in risk_metrics['risk_state'] and risk_metrics['risk_state']['recent_cycle']:
-                risk_metrics['risk_state']['recent_cycle']['risk_narrative'] = final_narrative_html
-    except Exception as e:
-        print(f"Warning: Advanced Risk Narrative generation failed: {e}")
 
     # --- 7.4 Unified Standardized Risk Structures ---
     # Individual Asset Risk
@@ -800,103 +763,225 @@ def run_snapshot(symbol: str, as_of_date=None, save_to_db: bool = False):
         if ai_reason != "capex_intensity_too_low": # Avoid too much noise
             print(f"[{symbol}] AI CapEx Risk Model Skipped: {ai_reason}")
 
-    # 8. 仪表盘数据生成 (Module 6)
+    # --- VERA 2.0 Unified Analysis Pipeline (A1, A2, A3, A4, A5) ---
+    current_price = prices["close"].iloc[-1]
+    print(f"[{effective_id}] Entering VERA 2.0 Pipeline (Spot: {current_price})...")
+    
+    # 1. Instantiate Engines
+    from vera.engines.permission_engine import PermissionEngine
+    from vera.engines.csp_contract_audit_engine import CSPContractAuditEngine
+    from vera.engines.behavior_engine import BehaviorEngine
+    from vera.engines.risk_narrative_engine import RiskNarrativeEngine
+    
+    perm_engine = PermissionEngine()
+    csp_audit_engine = CSPContractAuditEngine()
+    behavior_engine = BehaviorEngine()
+    risk_narrative_engine = RiskNarrativeEngine()
+    
+    # 2. Extract Base Layers for Engines
+    risk_layer = {
+        "D_state": confirmed_state_info.get('state', 'UNKNOWN'),
+        "R_state": 'RED', # Initial
+        "one_year_max_dd": risk_metrics.get('max_drawdown_1y_pct', 0.0),
+        "ten_year_max_dd": risk_metrics.get('max_drawdown_10y_pct', 0.0),
+        "ten_year_recovery_pct": risk_metrics.get('recovery_10y_pct', 1.0),
+        "rel_dd_pct": risk_metrics.get('current_drawdown', 0.0),
+    }
+    
+    val_layer = {
+        "valuation_percentile": pe_percentile or 50.0,
+        "valuation_status_key": getattr(fundamentals, "valuation_status_key", "NEUTRAL"),
+    }
+    
+    qual_layer = {
+        "grade": getattr(quality, 'quality_buffer_level', 'MEDIUM'),
+        "summary": getattr(quality, 'quality_summary', '质量一般')
+    }
+    
+    # 3. Stepwise Execution
+    
+    # A. Policy Permission
+    perm = perm_engine.evaluate(risk=risk_layer, valuation=val_layer, quality=qual_layer)
+    risk_layer["R_state"] = perm["R_state"]
+    
+    from vera.engines.csp_contract_engine import get_csp_candidates, pick_best_csp_contract, calc_annual_yield
+    analysis_date = data_date.date() if isinstance(data_date, datetime) else data_date
+    all_candidates = get_csp_candidates("vera.db", effective_id, current_price, as_of_date=analysis_date)
+    
+    # Audit ALL candidates so user sees their data regardless of filtering
+    best_option, audited_list = pick_best_csp_contract(all_candidates)
+    
+    # Identify the specific "CSP Candidates" (for recommendation)
+    csp_candidates = [
+        c for c in audited_list 
+        if 45 <= c['dte'] <= 120 
+        and c['strike'] <= current_price * 0.95
+    ]
+    
+    # Re-evaluate best_option only from the filtered candidates if we want to be strict,
+    # or just use the one from pick_best_csp_contract if it already handles status.
+    # Actually pick_best_csp_contract already picks the best APPROVED one.
+    # We should ensure best_option is from the preferred 45-120 range if possible.
+    best_candidate = None
+    if audited_list:
+        approved_in_range = [c for c in csp_candidates if c['_audit'].status == "APPROVED"]
+        if approved_in_range:
+            best_candidate = sorted(approved_in_range, key=lambda x: x['_audit'].score, reverse=True)[0]
+        else:
+            # Fallback to the best overall if no approved in range? 
+            # No, if nothing is approved in preferred range, best_candidate remains None
+            pass
+    
+    if perm["R_state"] == "RED":
+        csp_audit_result = {
+            "contract_status": "SKIPPED",
+            "contract_score": 0.0,
+            "reasons": [],
+            "suggestion": "策略层许可为 RED，已跳过期权合约审计。",
+        }
+    elif not best_candidate:
+        csp_audit_result = {
+            "contract_status": "SKIPPED",
+            "contract_score": 0.0,
+            "reasons": [],
+            "suggestion": "当前标的下未发现符合 5% 折价及 45-120 天期限的优质 CSP 候选合约。",
+        }
+    else:
+        # Use the already audited result from best_candidate
+        audit = best_candidate['_audit']
+        csp_audit_result = {
+            "contract_status": audit.status,
+            "contract_score": audit.score,
+            "reasons": audit.reasons,
+            "suggestion": audit.suggestion,
+            "best_contract": {
+                "strike": best_candidate['strike'],
+                "spot": current_price,
+                "dte": best_candidate['dte'],
+                "delta": best_candidate['delta'],
+                "annual_yield": calc_annual_yield(best_candidate.get('mid', 0), best_candidate['strike'], best_candidate['dte']),
+                "moneyness": best_candidate['discount_pct'],
+                "expiry": best_candidate['expiry'],
+                "iv": best_candidate.get('iv', 0)
+            }
+        }
+
+    # C. Unlock Conditions (New)
+    from vera.utils.indicators import close_position, vol_ratio, is_new_low
+    last_p = prices.iloc[-1]
+    cp = close_position(last_p)
+    vr = vol_ratio(last_p["volume"], last_p.get("vol_ma20", 0))
+    new_low = is_new_low(prices["low"], prices["close"])
+    
+    break_low_ok = not new_low
+    volume_ok = vr < 1.5
+    close_location_ok = cp > 0.55
+    all_unlocked = break_low_ok and volume_ok and close_location_ok
+    
+    unlock_conditions = {
+        "flags": {
+            "break_low_ok": break_low_ok,
+            "volume_ok": volume_ok,
+            "close_location_ok": close_location_ok,
+        },
+        "all_ok": all_unlocked,
+        "descriptions": {
+            "break_low_ok": "不创新低（最近 3 日）",
+            "volume_ok": "成交量温和回落（<1.5x）",
+            "close_location_ok": "收盘价由低位回升至 55% 以上",
+        }
+    }
+
+    ps_code = "US_REVERSAL" if all_unlocked else "US_TREND_DOWN"
+    regime_reasoning = {
+        "price_structure_code": ps_code,
+        "unlock_conditions": unlock_conditions
+    }
+
+    # C. Behavior & Cognition (A3)
+    behavior = behavior_engine.decide(
+        risk=risk_layer,
+        valuation=val_layer,
+        quality=qual_layer,
+        unlock_flags=unlock_conditions,
+        csp_strategy={"strategy_permission": perm["R_state"]},
+        csp_contract=csp_audit_result,
+        price_structure_code=ps_code
+    )
+    
+    # D. Final Narrative (A4)
+    tmp_result = {
+        "risk_overlay": risk_layer,
+        "valuation": val_layer,
+        "quality_buffer": qual_layer
+    }
+    narrative = risk_narrative_engine.build(tmp_result)
+    
+    # 4. Construct Unified analysis_result (A1)
+    analysis_result = {
+        "decision_core": {
+            "R_state": perm["R_state"],
+            "R_reason": perm.get("reason", "标准环境评估"),
+            "allowed_actions": perm.get("allowed_actions", {}),
+            "action_reasons": perm.get("action_reasons", {}),
+        },
+        "regime_reasoning": regime_reasoning,
+        "quality_buffer": qual_layer,
+        "csp_strategy": {
+            "strategy_permission": perm["R_state"],
+            "comment": perm.get("reason", "")
+        },
+        "csp_contract_audit": csp_audit_result,
+        "behavior_block": behavior,
+        "unlock_conditions": unlock_conditions,
+        "risk_narrative": narrative,
+        "risk_overlay": {
+            **risk_layer,
+            "risk_quadrant": risk_metrics.get('quadrant', 'Q2'),
+            "volatility": risk_metrics.get('annual_volatility', 0.0),
+        },
+        "valuation": {
+            **val_layer,
+            "anchor": anchor,
+            "pe_ttm": fundamentals.pe_ttm,
+            "eps_ttm": fundamentals.eps_ttm,
+            "dividend_yield": fundamentals.dividend_yield
+        },
+        "csp_contract_table": audited_list
+    }
+
+    # 5. Build DashboardData ViewModel
     dashboard_data = generate_dashboard_data(
-        symbol=asset.asset_id, # Use canonical ID
-        price=prices["close"].iloc[-1],
+        symbol=effective_id,
+        price=current_price,
         report_date=data_date.strftime("%Y-%m-%d"),
         risk_metrics=risk_metrics,
         fundamentals=fundamentals,
-        conclusion=conclusion,
-        is_value_trap=is_trap,
+        conclusion=behavior["suggestion"],
         risk_card=risk_card,
-        behavior_flags=behavior_flags,
-        bank_score=bank_score,
-        bank_metrics=bank_metrics,
-        market_context=market_context,
-        overlay=overlay,
-        quality_obj=quality, # NEW: pass live quality results
+        overlay=overlay if 'overlay' in locals() else {},
+        quality_obj=quality,
         pe_percentile=pe_percentile,
-        valuation_path=valuation_path_result,   # NEW: Path Analysis
-        change_percent=change_pct, # NEW
-        expert_audit=expert_audit,  # NEW
-        ai_capex_overlay=ai_overlay # NEW
+        change_percent=change_pct,
+        expert_audit=expert_audit if 'expert_audit' in locals() else None,
+        ai_capex_overlay=ai_overlay if 'ai_overlay' in locals() else None
     )
     
-    # 8.5 Behavior Engine (Phase 4)
-    from core.behavior_engine import evaluate_behavior
-    
-    d_state = risk_metrics.get('risk_state', {}).get('state')
-    risk_quad = risk_card.get('risk_quadrant') if risk_card else None
-    val_bucket = getattr(fundamentals, 'valuation_bucket', None)
-    qual_level = getattr(quality, 'quality_buffer_level', 'WEAK') if quality else 'WEAK'
+    dashboard_data.analysis_result = analysis_result
+    dashboard_data.overall_conclusion = behavior["suggestion"]
+    dashboard_data.behavior_suggestion = behavior["suggestion"]
+    dashboard_data.cognitive_warning = behavior["cognitive_warning"]
 
-    if d_state and risk_quad and val_bucket:
-        try:
-            val_status_key = getattr(fundamentals, 'valuation_status_key', None)
-            behavior_res = evaluate_behavior(
-                d_state=d_state,
-                quadrant=risk_quad,
-                valuation_bucket=val_bucket,
-                quality_level=qual_level,
-                valuation_status_key=val_status_key
-            )
-            
-            # Overwrite Dashboard Data with Rule Engine Decision
-            dashboard_data.behavior_suggestion = behavior_res.action_label_zh
-            dashboard_data.cognitive_warning = behavior_res.note_zh
-            
-            # Suggestion 4: Refined layered conclusion (Layered progressively)
-            # 1. Market Env
-            market_env = risk_metrics.get('risk_state', {}).get('desc', '环境待确认')
-            # 2. Valuation & Quality
-            val_status = fundamentals.valuation_status
-            val_pct_str = f"{pe_percentile:.1%}" if pe_percentile is not None else "N/A"
-            qual_status = qual_level
-            # 3. Contract Audit (Optional but requested)
-            from vera.engines.csp_contract_engine import get_csp_candidates, pick_best_csp_contract
-            current_price = prices["close"].iloc[-1]
-            candidates = get_csp_candidates("vera.db", asset.asset_id, current_price)
-            _, all_audited = pick_best_csp_contract(candidates)
-            has_approved_csp = any(c['_audit'].status == "APPROVED" for c in all_audited) if all_audited else False
-            
-            csp_note = ""
-            if behavior_res.action_code not in ["NO_NEW_POSITION", "CAPITAL_PRESERVATION"]:
-                csp_note = "期权合约审计通过，" if has_approved_csp else "期权合约不匹配，"
-            
-            # Assembly
-            layered_summary = f"市场{market_env}，估值{val_status}(分位 {val_pct_str})且质量{qual_status}。{csp_note}行为模块全局建议为「{behavior_res.action_label_zh}」。"
-            dashboard_data.overall_conclusion = layered_summary
-
-            # Inject action code into overlay for debugging/verification
-            if dashboard_data.overlay is None: dashboard_data.overlay = {}
-            dashboard_data.overlay['behavior_action_code'] = behavior_res.action_code
-            dashboard_data.overlay['behavior_action_label_zh'] = behavior_res.action_label_zh
-            dashboard_data.overlay['has_approved_csp'] = has_approved_csp
-            
-            print(f"[{symbol}] Behavior Rule Triggered: {behavior_res.triggered_rule_name} -> {behavior_res.action_code}")
-            
-        except Exception as be_err:
-             print(f"[{symbol}] Behavior Engine Error: {be_err}")
+    print(f"[{symbol}] Behavior Decision: {behavior['posture']} -> {behavior['suggestion']}")
     
     save_full_snapshot(snapshot_id, asset.asset_id, data_date.strftime("%Y-%m-%d"), 
-                       risk_metrics, fundamentals, conclusion, 
+                       risk_metrics, fundamentals, behavior["suggestion"], 
                        anchor, is_trap, 0, bank_score, 
-                       current_price=prices["close"].iloc[-1], # Pass current price
+                       current_price=prices["close"].iloc[-1],
+                       pe_percentile=pe_percentile,
+                       change_percent=change_pct,
                        save_to_db=save_to_db)
-                       
-    # persist market context into risk_card_snapshot (best-effort)
-    if save_to_db:
-        save_market_context(
-            snapshot_id=snapshot_id,
-            symbol=symbol,
-            market_index_symbol=market_index.symbol,
-            amplifier=amp,
-            alpha=alpha,
-            regime_label=regime_label
-        )
-                       
-    print(f"[{symbol}] Analysis Complete. Conclusion: {conclusion}")
+
     return dashboard_data
 
 def ai_capex_metrics_for_symbol(symbol: str, report_date: str) -> Dict[str, float]:
@@ -927,7 +1012,7 @@ def ai_capex_metrics_for_symbol(symbol: str, report_date: str) -> Dict[str, floa
 
 def save_full_snapshot(snapshot_id, symbol, as_of_date, risk_metrics, 
                        fundamentals, conclusion, anchor, is_trap, payout_score, bank_score, 
-                       current_price=None, save_to_db=False):
+                       current_price=None, pe_percentile=None, change_percent=None, save_to_db=False):
     """保存到 analysis_snapshot 和 metric_details 表"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -1030,12 +1115,13 @@ def save_full_snapshot(snapshot_id, symbol, as_of_date, risk_metrics,
             """, (snapshot_id, "current_price", safe_val(current_price)))
         
         # Save change percent if available (can be in fundamentals or passed in)
-        change_pct = getattr(fundamentals, 'change_percent', None)
-        if change_pct is not None:
+        fund_change_pct = getattr(fundamentals, 'change_percent', None)
+        final_change_pct = change_percent if change_percent is not None else fund_change_pct
+        if final_change_pct is not None:
             cursor.execute("""
                 INSERT INTO metric_details (snapshot_id, metric_key, value)
                 VALUES (?, ?, ?)
-            """, (snapshot_id, "change_percent", safe_val(change_pct)))
+            """, (snapshot_id, "change_percent", safe_val(final_change_pct)))
             
         conn.commit()
     

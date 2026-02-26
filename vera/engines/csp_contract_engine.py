@@ -133,7 +133,7 @@ def pick_best_csp_contract(candidates: List[Dict[str, Any]]) -> Tuple[Optional[D
     
     return best, all_sorted
 
-def get_csp_candidates(db_path: str, asset_id: str, current_price: float) -> List[Dict[str, Any]]:
+def get_csp_candidates(db_path: str, asset_id: str, current_price: float, as_of_date: Optional[date] = None) -> List[Dict[str, Any]]:
     """从数据库获取 CSP 候选 Put 合约"""
     conn = sqlite3.connect(db_path)
     try:
@@ -148,13 +148,13 @@ def get_csp_candidates(db_path: str, asset_id: str, current_price: float) -> Lis
             return []
             
         candidates = []
-        today = date.today()
+        anchor_date = as_of_date if as_of_date else date.today()
         
         for _, row in df.iterrows():
             expiry_str = row['expiry_date']
             if len(expiry_str) > 10: expiry_str = expiry_str[:10]
             expiry = datetime.strptime(expiry_str, '%Y-%m-%d').date()
-            days_to_expiry = (expiry - today).days
+            days_to_expiry = (expiry - anchor_date).days
             
             if days_to_expiry <= 0:
                 continue

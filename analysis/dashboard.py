@@ -373,7 +373,7 @@ def generate_dashboard_data(
                        quality_template_name,
                        dividend_safety_level, dividend_safety_label_zh,
                        earnings_state_code, earnings_state_label_zh, earnings_state_desc_zh,
-                       notes
+                       quality_notes
                 FROM quality_snapshot
                 WHERE asset_id = ?
                 ORDER BY created_at DESC

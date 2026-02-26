@@ -36,6 +36,11 @@ def save_quality_snapshot(
     quality_buffer_level: str,
     quality_summary: str,
     quality_template_name: str = "General",
+    dividend_safety_level: Optional[str] = None,
+    dividend_safety_label_zh: Optional[str] = None,
+    earnings_state_code: Optional[str] = None,
+    earnings_state_label_zh: Optional[str] = None,
+    earnings_state_desc_zh: Optional[str] = None,
     notes: Optional[Dict[str, Any]] = None,
 ):
     # ---- Enum validation ----
@@ -70,8 +75,10 @@ def save_quality_snapshot(
                 balance_sheet_flag, cashflow_coverage_flag, leverage_risk_flag,
                 payout_consistency_flag, dilution_risk_flag, regulatory_dependence_flag,
                 quality_buffer_level, quality_summary,
-                quality_notes, quality_template_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                quality_notes, quality_template_name,
+                dividend_safety_level, dividend_safety_label_zh,
+                earnings_state_code, earnings_state_label_zh, earnings_state_desc_zh
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot_id, asset_id,
@@ -79,7 +86,9 @@ def save_quality_snapshot(
                 balance_sheet_flag, cashflow_coverage_flag, leverage_risk_flag,
                 payout_consistency_flag, dilution_risk_flag, regulatory_dependence_flag,
                 quality_buffer_level, quality_summary,
-                notes_json, quality_template_name
+                notes_json, quality_template_name,
+                dividend_safety_level, dividend_safety_label_zh,
+                earnings_state_code, earnings_state_label_zh, earnings_state_desc_zh
             )
         )
         conn.commit()
